@@ -39,9 +39,9 @@ type App struct {
 	window  *fltk.Window
 	status  *fltk.Box
 
-	rootsBrowser    *fltk.HoldBrowser
-	timelineBrowser *fltk.HoldBrowser
-	changesBrowser  *fltk.HoldBrowser
+	rootsCards      *cardList
+	timelineCards   *cardList
+	changesCards    *cardList
 	search          *fltk.Input
 	summary         *fltk.Box
 	addedSummary    *fltk.Box
@@ -151,10 +151,7 @@ func (u *App) build() {
 	leftTitle := label("FOLDERS", 14, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
 	leftSubtitle := label("Folders available for snapshot history", 11, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
 	leftSubtitle.SetLabelColor(colorSecondary)
-	u.rootsBrowser = fltk.NewHoldBrowser(0, 0, 265, 590)
-	u.rootsBrowser.SetColumnChar('\t')
-	u.rootsBrowser.SetColumnWidths(142, 66, 0)
-	styleWidget(u.rootsBrowser)
+	u.rootsCards = newCardList(0, 0, 265, 590)
 	rootSettings := button("Folder Settings")
 	left.Fixed(leftTitle, 25)
 	left.Fixed(leftSubtitle, 30)
@@ -180,10 +177,7 @@ func (u *App) build() {
 	snapshotHeader.Fixed(u.compareButton, 145)
 	snapshotHeader.End()
 
-	u.timelineBrowser = fltk.NewHoldBrowser(0, 0, 929, 176)
-	u.timelineBrowser.SetColumnChar('\t')
-	u.timelineBrowser.SetColumnWidths(48, 140, 92, 96, 96, 0)
-	styleWidget(u.timelineBrowser)
+	u.timelineCards = newCardList(0, 0, 929, 176)
 	snapshotActions := fltk.NewFlex(0, 0, 929, 34)
 	snapshotActions.SetType(fltk.ROW)
 	snapshotActions.SetGap(8)
@@ -233,12 +227,9 @@ func (u *App) build() {
 	controls.Fixed(searchLabel, 56)
 	controls.Fixed(u.search, 240)
 	controls.End()
-	u.changesBrowser = fltk.NewHoldBrowser(0, 0, 929, 310)
-	u.changesBrowser.SetColumnChar('\t')
-	u.changesBrowser.SetColumnWidths(88, 470, 0)
-	styleWidget(u.changesBrowser)
+	u.changesCards = newCardList(0, 0, 929, 310)
 	right.Fixed(snapshotHeader, 48)
-	right.Fixed(u.timelineBrowser, 176)
+	right.Fixed(u.timelineCards.scroll, 176)
 	right.Fixed(snapshotActions, 34)
 	right.Fixed(u.summary, 40)
 	right.Fixed(metrics, 62)
@@ -252,8 +243,6 @@ func (u *App) build() {
 	add.SetCallback(u.addFolder)
 	rootSettings.SetCallback(u.showRootSettings)
 	u.snapshotButton.SetCallback(u.snapshotNow)
-	u.rootsBrowser.SetCallback(u.selectRoot)
-	u.timelineBrowser.SetCallback(u.selectTimelineSnapshot)
 	u.compareButton.SetCallback(u.compareSelected)
 	u.editButton.SetCallback(u.editSnapshotDescription)
 	u.warningsButton.SetCallback(u.viewSnapshotWarnings)
@@ -321,32 +310,36 @@ func (u *App) handleEvent(event app.Event) {
 func (u *App) refreshRoots() {
 	u.roots = u.service.Config().Roots
 	app.SortRoots(u.roots)
-	u.rootsBrowser.Clear()
-	selectedLine := 0
-	for i, root := range u.roots {
+	u.rootsCards.clear()
+	for _, root := range u.roots {
 		state := ""
 		if root.Archived {
-			state = " [Archived]"
+			state = "Archived"
 		} else if root.LastScanError != "" {
-			state = " [Unavailable]"
+			state = "Unavailable"
 		}
 		records, _ := u.service.ListSnapshots(root.RootID)
-		count := fmt.Sprintf("%d saved", len(records))
-		last := "—"
+		meta := "No snapshots yet"
 		if len(records) > 0 {
-			last = records[0].CompletedAtUTC.Local().Format("02 Jan 15:04")
+			meta = fmt.Sprintf("%d snapshot%s  ·  Latest %s", len(records), pluralSuffix(len(records)), records[0].CompletedAtUTC.Local().Format("02 Jan 15:04"))
 		}
-		u.rootsBrowser.AddWithData(root.DisplayName+state+"\t"+count+"\t"+last, root.RootID)
-		if root.RootID == u.selectedRootID {
-			selectedLine = i + 1
+		if state != "" {
+			meta += "  ·  " + state
 		}
+		rootID := root.RootID
+		card := folderCardStyle{
+			Name: root.DisplayName, Path: root.Path, Meta: meta, Count: len(records),
+			Selected: root.RootID == u.selectedRootID, Unavailable: root.LastScanError != "",
+		}
+		u.rootsCards.add(76, root.Path, func(button *fltk.Button) { drawFolderCard(button, card) }, func() {
+			fltk.Awake(func() { u.selectRoot(rootID) })
+		})
 	}
-	if selectedLine > 0 {
-		u.rootsBrowser.SetValue(selectedLine)
+	if len(u.roots) == 0 {
+		u.rootsCards.showEmpty("No folders yet\n\nUse Add Folder to begin.")
 	}
 	if u.selectedRootID == "" && len(u.roots) > 0 {
-		u.rootsBrowser.SetValue(1)
-		u.selectRoot()
+		u.selectRoot(u.roots[0].RootID)
 	}
 }
 
@@ -373,20 +366,31 @@ func (u *App) addFolder() {
 	}
 }
 
-func (u *App) selectRoot() {
-	line := u.rootsBrowser.Value()
-	if line < 1 || line > len(u.roots) {
+func (u *App) selectRoot(rootID string) {
+	if rootID == u.selectedRootID {
 		return
 	}
-	u.selectedRootID = u.roots[line-1].RootID
+	var selected model.WatchedRoot
+	found := false
+	for _, root := range u.roots {
+		if root.RootID == rootID {
+			selected, found = root, true
+			break
+		}
+	}
+	if !found {
+		return
+	}
+	u.selectedRootID = rootID
 	u.beforeID, u.afterID = "", ""
 	u.selectedSnapshotID = ""
 	u.filter = ""
 	u.search.SetValue("")
 	u.snapshotButton.Activate()
-	if u.roots[line-1].Archived {
+	if selected.Archived {
 		u.snapshotButton.Deactivate()
 	}
+	u.refreshRoots()
 	u.showIdleComparison("Pick two snapshots from this folder.")
 	u.loadTimeline()
 }
@@ -426,41 +430,40 @@ func (u *App) loadTimeline() {
 }
 
 func (u *App) renderTimeline() {
-	u.timelineBrowser.Clear()
-	selectedLine := 0
-	for i, snapshot := range u.timeline {
+	u.timelineCards.clear()
+	for _, snapshot := range u.timeline {
 		role := ""
 		if snapshot.SnapshotID == u.beforeID {
 			role = "A"
 		} else if snapshot.SnapshotID == u.afterID {
 			role = "B"
 		}
-		note := snapshot.Description
+		note := titleCase(string(snapshot.Trigger))
+		if snapshot.Description != "" {
+			note += "  ·  " + snapshot.Description
+		}
 		if !snapshot.PayloadAvailable {
-			if note != "" {
-				note += " · "
-			}
-			note += "payload missing"
+			note += "  ·  Payload missing"
 		}
 		if snapshot.WarningCount > 0 {
-			if note != "" {
-				note += " · "
-			}
-			note += fmt.Sprintf("%d warning(s)", snapshot.WarningCount)
+			note += fmt.Sprintf("  ·  %d warning%s", snapshot.WarningCount, pluralSuffix(snapshot.WarningCount))
 		}
-		u.timelineBrowser.AddWithData(
-			role+"\t"+snapshot.CompletedAtUTC.Local().Format("02 Jan 2006 15:04")+
-				"\t"+fmt.Sprintf("%d files", snapshot.FileCount)+
-				"\t"+fmt.Sprintf("%d folders", snapshot.DirectoryCount)+
-				"\t"+formatBytes(snapshot.TotalFileBytes)+"\t"+note,
-			snapshot.SnapshotID,
+		details := fmt.Sprintf("%d file%s  •  %d folder%s  •  %s",
+			snapshot.FileCount, pluralSuffix64(snapshot.FileCount),
+			snapshot.DirectoryCount, pluralSuffix64(snapshot.DirectoryCount),
+			formatBytes(snapshot.TotalFileBytes),
 		)
-		if snapshot.SnapshotID == u.selectedSnapshotID {
-			selectedLine = i + 1
+		snapshotID := snapshot.SnapshotID
+		card := snapshotCardStyle{
+			Date: snapshot.CompletedAtUTC.Local().Format("Mon, 02 Jan 2006  ·  15:04"), Details: details,
+			Note: note, Role: role, Selected: snapshot.SnapshotID == u.selectedSnapshotID, Missing: !snapshot.PayloadAvailable,
 		}
+		u.timelineCards.add(72, card.Date+" — "+details, func(button *fltk.Button) { drawSnapshotCard(button, card) }, func() {
+			fltk.Awake(func() { u.selectTimelineSnapshot(snapshotID) })
+		})
 	}
-	if selectedLine > 0 {
-		u.timelineBrowser.SetValue(selectedLine)
+	if len(u.timeline) == 0 {
+		u.timelineCards.showEmpty("No snapshots yet.\nCreate the first snapshot for this folder.")
 	}
 	u.updateSnapshotActions()
 }
@@ -468,14 +471,12 @@ func (u *App) renderTimeline() {
 // selectTimelineSnapshot mirrors the macOS history interaction: the first
 // click selects A, the second selects B, and a third rolls the pair
 // forward. Clicking an assigned snapshot removes it from the pair.
-func (u *App) selectTimelineSnapshot() {
-	line := u.timelineBrowser.Value()
-	if line < 1 || line > len(u.timeline) {
+func (u *App) selectTimelineSnapshot(snapshotID string) {
+	if _, ok := u.snapshotRecord(snapshotID); !ok {
 		return
 	}
-	id := u.timeline[line-1].SnapshotID
-	u.selectedSnapshotID = id
-	u.applyPair(u.currentPair().selectSnapshot(id, u.timeline))
+	u.selectedSnapshotID = snapshotID
+	u.applyPair(u.currentPair().selectSnapshot(snapshotID, u.timeline))
 	u.renderTimeline()
 	u.updateCompareButton()
 	if u.beforeID != "" && u.afterID != "" {
@@ -531,8 +532,8 @@ func (u *App) compareSelected() {
 	u.diff = model.DiffResult{}
 	u.summary.SetLabel("Loading snapshots and comparing files...")
 	u.setMetricPlaceholders()
-	u.changesBrowser.Clear()
-	u.changesBrowser.Add("\tWorking...")
+	u.changesCards.clear()
+	u.changesCards.showEmpty("Working…")
 	u.compareButton.Deactivate()
 	go func() {
 		before, err := u.service.LoadSnapshot(rootID, beforeID)
@@ -587,7 +588,7 @@ func (u *App) renderDiff() {
 	u.deltaSummary.SetLabel("SIZE DELTA\n" + formatBytes(s.NetBytes))
 	u.renderFilterState()
 	query := strings.ToLower(strings.TrimSpace(u.search.Value()))
-	u.changesBrowser.Clear()
+	u.changesCards.clear()
 	visible := 0
 	for _, item := range u.diff.Entries {
 		if item.Uncertain || item.ScopeDifference || item.Change == model.ChangeUnchanged {
@@ -599,8 +600,17 @@ func (u *App) renderDiff() {
 		if query != "" && !strings.Contains(strings.ToLower(item.DisplayPath), query) {
 			continue
 		}
-		marker := map[model.ChangeType]string{model.ChangeAdded: "Added", model.ChangeRemoved: "Removed", model.ChangeModified: "Modified"}[item.Change]
-		u.changesBrowser.Add(marker + "\t" + item.DisplayPath + "\t" + diffEntryDetail(item))
+		marker := map[model.ChangeType]string{model.ChangeAdded: "ADDED", model.ChangeRemoved: "REMOVED", model.ChangeModified: "MODIFIED"}[item.Change]
+		entry := item.After
+		if entry == nil {
+			entry = item.Before
+		}
+		u.changesCards.add(56, item.DisplayPath, func(button *fltk.Button) {
+			drawChangeCard(button, changeCardStyle{
+				Path: item.DisplayPath, Detail: diffEntryDetail(item), Status: marker,
+				Change: string(item.Change), Directory: entry != nil && entry.Type == model.EntryDirectory,
+			})
+		}, nil)
 		visible++
 	}
 	if visible == 0 {
@@ -608,7 +618,7 @@ func (u *App) renderDiff() {
 		if query != "" || u.filter != "" {
 			message = "No changes match the current filter."
 		}
-		u.changesBrowser.Add("\t" + message)
+		u.changesCards.showEmpty(message)
 	}
 }
 
@@ -634,7 +644,8 @@ func (u *App) showIdleComparison(message string) {
 	u.diff = model.DiffResult{}
 	u.summary.SetLabel(message)
 	u.setMetricPlaceholders()
-	u.changesBrowser.Clear()
+	u.changesCards.clear()
+	u.changesCards.showEmpty(message)
 	u.renderFilterState()
 	u.updateCompareButton()
 }
@@ -645,8 +656,8 @@ func (u *App) showComparisonError(message string) {
 	u.diff = model.DiffResult{}
 	u.summary.SetLabel(message)
 	u.setMetricPlaceholders()
-	u.changesBrowser.Clear()
-	u.changesBrowser.Add("\t" + message)
+	u.changesCards.clear()
+	u.changesCards.showEmpty(message)
 	u.renderFilterState()
 }
 
@@ -1288,4 +1299,18 @@ func titleCase(value string) string {
 		return value
 	}
 	return strings.ToUpper(value[:1]) + value[1:]
+}
+
+func pluralSuffix(value int) string {
+	if value == 1 {
+		return ""
+	}
+	return "s"
+}
+
+func pluralSuffix64(value int64) string {
+	if value == 1 {
+		return ""
+	}
+	return "s"
 }

@@ -4,6 +4,8 @@
 **Source:** `260825-FolderSnap_Windows_History_First_PRD.md`  
 **Baseline:** FolderSnap macOS History implementation
 
+**Status:** Implemented and verified on 27 August 2026
+
 ## Architecture decision
 
 Keep Go and FLTK. Replace the development persistence model with schema version 2 and a macOS-style single history index plus compressed snapshot payloads. No schema-v1 migration will be implemented; local development data will be reset.
@@ -38,6 +40,13 @@ The scanner continues to persist flat, sorted relative-path entries because that
 - Global history index round-trip, per-root grouping, deletion, retention, and missing-payload behavior are tested.
 - `go test -count=1 ./...` and `go vet ./...` pass.
 - Release build uses the Windows GUI subsystem and depends only on Windows system DLLs.
+
+## Verification result
+
+- Folder and snapshot history render as custom cards with visible paths, dates, counts, sizes, descriptions, warnings, and right-aligned A/B badges.
+- A real saved pair was selected and compared in the release build. The UI reported one modified file and rendered its relative path, before/after size, and classification correctly.
+- `go test -count=1 ./...`, `go vet ./...`, and `git diff --check` pass.
+- The release executable was rebuilt and inspected; its imports are limited to Windows system DLLs.
 
 ## Deferred until the core is stable
 
