@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,7 +76,9 @@ func New(dataDir string, logger *log.Logger) (*Service, error) {
 		scanner: scan.Scanner{}, logger: logger, events: make(chan Event, 256), jobs: make(map[string]*rootJob),
 		scanSlots: make(chan struct{}, 2), ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1),
 	}
-	_, _ = service.history.Repair()
+	if _, repairErr := service.history.Repair(); repairErr != nil && logger != nil {
+		logger.Printf("history repair failed: %v", repairErr)
+	}
 	return service, nil
 }
 
@@ -99,6 +102,10 @@ func (s *Service) Config() model.Config {
 	defer s.mu.RUnlock()
 	copy := s.config
 	copy.Roots = append([]model.WatchedRoot(nil), s.config.Roots...)
+	copy.DefaultIgnoreRules = append([]string(nil), s.config.DefaultIgnoreRules...)
+	for index := range copy.Roots {
+		copy.Roots[index].IgnoreRules = append([]string(nil), copy.Roots[index].IgnoreRules...)
+	}
 	return copy
 }
 
@@ -115,6 +122,10 @@ func (s *Service) AddRoot(path string) (model.WatchedRoot, error) {
 		return model.WatchedRoot{}, err
 	}
 	abs, _ := filepath.Abs(path)
+	protectedRule, err := dataProtectionRule(abs, s.DataDir())
+	if err != nil {
+		return model.WatchedRoot{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, root := range s.config.Roots {
@@ -126,6 +137,9 @@ func (s *Service) AddRoot(path string) (model.WatchedRoot, error) {
 		RootID: ids.New(), DisplayName: filepath.Base(filepath.Clean(abs)), Path: abs, NormalizedPath: normalized,
 		Schedule: model.Schedule{Kind: model.ScheduleManual}, IgnoreRules: append([]string(nil), s.config.DefaultIgnoreRules...),
 		Retention: s.config.DefaultRetention,
+	}
+	if protectedRule != "" {
+		root.IgnoreRules = append(root.IgnoreRules, protectedRule)
 	}
 	if root.DisplayName == "." || root.DisplayName == string(filepath.Separator) {
 		root.DisplayName = abs
@@ -144,8 +158,13 @@ func (s *Service) UpdateRoot(updated model.WatchedRoot) error {
 	defer s.mu.Unlock()
 	for i := range s.config.Roots {
 		if s.config.Roots[i].RootID == updated.RootID {
+			original := s.config.Roots[i]
+			updated.Path = original.Path
+			updated.NormalizedPath = original.NormalizedPath
+			updated.IgnoreRules = append([]string(nil), updated.IgnoreRules...)
 			s.config.Roots[i] = updated
 			if err := s.configStore.Save(s.config); err != nil {
+				s.config.Roots[i] = original
 				return err
 			}
 			s.signalScheduler()
@@ -161,6 +180,7 @@ func (s *Service) UpdateConfig(updated model.Config) error {
 		return errors.New("unsupported default retention")
 	}
 	updated.SchemaVersion = model.SchemaVersion
+	updated.DefaultIgnoreRules = append([]string(nil), updated.DefaultIgnoreRules...)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	updated.Roots = append([]model.WatchedRoot(nil), s.config.Roots...)
@@ -184,16 +204,29 @@ func (s *Service) ClearHistory(rootID string) error {
 		return err
 	}
 	s.mu.Lock()
+	var original *model.WatchedRoot
 	for i := range s.config.Roots {
 		if s.config.Roots[i].RootID == rootID {
+			value := s.config.Roots[i]
+			original = &value
 			s.config.Roots[i].LastSnapshotUTC = time.Time{}
 			s.config.Roots[i].LastScanError = ""
 			break
 		}
 	}
 	err := s.configStore.Save(s.config)
+	if err != nil && original != nil {
+		for i := range s.config.Roots {
+			if s.config.Roots[i].RootID == rootID {
+				s.config.Roots[i] = *original
+				break
+			}
+		}
+	}
 	s.mu.Unlock()
-	s.emit(Event{Type: EventConfigChange, RootID: rootID})
+	if err == nil {
+		s.emit(Event{Type: EventConfigChange, RootID: rootID})
+	}
 	return err
 }
 
@@ -202,6 +235,7 @@ func (s *Service) Root(rootID string) (model.WatchedRoot, bool) {
 	defer s.mu.RUnlock()
 	for _, root := range s.config.Roots {
 		if root.RootID == rootID {
+			root.IgnoreRules = append([]string(nil), root.IgnoreRules...)
 			return root, true
 		}
 	}
@@ -297,9 +331,16 @@ func (s *Service) runScans(rootID string, trigger model.SnapshotTrigger) {
 		}
 		slotHeld = true
 		s.emit(Event{Type: EventScanStarted, RootID: rootID, Trigger: trigger})
-		snapshot, err := s.scanner.Scan(ctx, scan.Request{RootID: rootID, RootPath: root.Path, DisplayTitle: root.DisplayName, Trigger: trigger, IgnoreRules: root.IgnoreRules, Progress: func(items int64, path string) {
-			s.emit(Event{Type: EventScanProgress, RootID: rootID, Trigger: trigger, Items: items, Path: path})
-		}})
+		ignoreRules, protectionErr := s.effectiveIgnoreRules(root)
+		var snapshot model.Snapshot
+		var err error
+		if protectionErr != nil {
+			err = protectionErr
+		} else {
+			snapshot, err = s.scanner.Scan(ctx, scan.Request{RootID: rootID, RootPath: root.Path, DisplayTitle: root.DisplayName, Trigger: trigger, IgnoreRules: ignoreRules, Progress: func(items int64, path string) {
+				s.emit(Event{Type: EventScanProgress, RootID: rootID, Trigger: trigger, Items: items, Path: path})
+			}})
+		}
 		<-s.scanSlots
 		slotHeld = false
 		cancel()
@@ -343,6 +384,49 @@ func (s *Service) runScans(rootID string, trigger model.SnapshotTrigger) {
 		s.mu.Unlock()
 		trigger = next
 	}
+}
+
+func (s *Service) effectiveIgnoreRules(root model.WatchedRoot) ([]string, error) {
+	rules := append([]string(nil), root.IgnoreRules...)
+	rule, err := dataProtectionRule(root.Path, s.DataDir())
+	if err != nil {
+		return nil, err
+	}
+	if rule == "" {
+		return rules, nil
+	}
+	for _, existing := range rules {
+		if strings.EqualFold(existing, rule) {
+			return rules, nil
+		}
+	}
+	return append(rules, rule), nil
+}
+
+func dataProtectionRule(root, dataDir string) (string, error) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	dataAbs, err := filepath.Abs(dataDir)
+	if err != nil {
+		return "", err
+	}
+	relative, err := filepath.Rel(rootAbs, dataAbs)
+	if err != nil {
+		return "", err
+	}
+	if relative == "." {
+		return "", errors.New("the FolderSnap data directory cannot be watched")
+	}
+	if relative == ".." || strings.HasPrefix(relative, `..\`) || filepath.IsAbs(relative) {
+		return "", nil
+	}
+	normalized, err := pathutil.NormalizeRelative(relative)
+	if err != nil || normalized == "" {
+		return "", err
+	}
+	return "/" + normalized + "/", nil
 }
 
 func (s *Service) setRootScanResult(rootID string, completed time.Time, scanErr error) {

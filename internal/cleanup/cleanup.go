@@ -79,12 +79,25 @@ func (s Service) Preflight(ctx context.Context, selected []Candidate) []Prefligh
 		if ctx.Err() != nil {
 			break
 		}
+		if normalized, normalizeErr := pathutil.NormalizeRelative(candidate.Path); normalizeErr != nil || normalized == "" {
+			results = append(results, PreflightItem{Candidate: candidate, Status: StatusInvalidPath, Reason: "empty or invalid relative path"})
+			continue
+		}
 		target, err := pathutil.JoinWithinRoot(s.RootPath, candidate.Path)
 		if err != nil {
 			results = append(results, PreflightItem{Candidate: candidate, Status: StatusInvalidPath, Reason: err.Error()})
 			continue
 		}
 		item := PreflightItem{Candidate: candidate, Target: target}
+		if ancestor, ancestorErr := reparseAncestor(s.RootPath, target); ancestorErr != nil {
+			item.Status, item.Reason = StatusUnreadable, ancestorErr.Error()
+			results = append(results, item)
+			continue
+		} else if ancestor != "" {
+			item.Status, item.Reason = StatusInvalidPath, "path crosses reparse point: "+ancestor
+			results = append(results, item)
+			continue
+		}
 		info, err := os.Lstat(target)
 		if errors.Is(err, os.ErrNotExist) {
 			item.Status = StatusAlreadyMissing
@@ -146,11 +159,26 @@ func (s Service) Preflight(ctx context.Context, selected []Candidate) []Prefligh
 }
 
 func (s Service) Execute(ctx context.Context, preflight []PreflightItem) []PreflightItem {
-	ready := make([]PreflightItem, 0, len(preflight))
 	result := append([]PreflightItem(nil), preflight...)
+	candidates := make([]Candidate, 0, len(preflight))
 	for _, item := range preflight {
 		if item.Status == StatusReady {
-			ready = append(ready, item)
+			candidates = append(candidates, item.Candidate)
+		}
+	}
+	// Revalidate after the confirmation dialog and immediately before any
+	// filesystem mutation. This closes the preflight/execute race window.
+	revalidated := s.Preflight(ctx, candidates)
+	ready := make([]PreflightItem, 0, len(revalidated))
+	for _, current := range revalidated {
+		for index := range result {
+			if result[index].Candidate.Path == current.Candidate.Path {
+				result[index] = current
+				break
+			}
+		}
+		if current.Status == StatusReady {
+			ready = append(ready, current)
 		}
 	}
 	sort.Slice(ready, func(i, j int) bool {
@@ -202,6 +230,9 @@ func (s Service) Execute(ctx context.Context, preflight []PreflightItem) []Prefl
 }
 
 func WriteAudit(dataDir, rootID, beforeID, afterID string, results []PreflightItem) error {
+	if err := pathutil.ValidateStorageID(rootID); err != nil {
+		return err
+	}
 	path := filepath.Join(dataDir, "roots", rootID, "cleanup-log.jsonl")
 	var existing []byte
 	existing, _ = os.ReadFile(path)
@@ -219,6 +250,37 @@ func WriteAudit(dataDir, rootID, beforeID, afterID string, results []PreflightIt
 	existing = append(existing, line...)
 	existing = append(existing, '\n')
 	return atomicfile.Write(path, 0o600, func(file *os.File) error { _, err := file.Write(existing); return err })
+}
+
+func reparseAncestor(root, target string) (string, error) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	relative, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil {
+		return "", err
+	}
+	parts := strings.FieldsFunc(relative, func(r rune) bool { return r == '/' || r == '\\' })
+	current := rootAbs
+	for _, part := range parts[:max(0, len(parts)-1)] {
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if errors.Is(statErr, os.ErrNotExist) {
+			return "", nil
+		}
+		if statErr != nil {
+			return "", statErr
+		}
+		if typeOf(info) == model.EntryReparse {
+			return current, nil
+		}
+	}
+	return "", nil
 }
 
 func matchesFile(info fs.FileInfo, expected model.SnapshotEntry) bool {

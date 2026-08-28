@@ -64,6 +64,28 @@ func TestLargeMostlyUnchangedComparisonMaterializesOnlyChanges(t *testing.T) {
 	}
 }
 
+func BenchmarkCompareLargeMostlyUnchanged(b *testing.B) {
+	const count = 200_000
+	beforeEntries := make([]model.SnapshotEntry, count)
+	afterEntries := make([]model.SnapshotEntry, count)
+	for index := range count {
+		path := fmt.Sprintf("folder/file-%06d.dat", index)
+		beforeEntries[index] = entry(path, model.EntryFile, 64, 10)
+		afterEntries[index] = entry(path, model.EntryFile, 64, 10)
+	}
+	afterEntries[count-1].Size++
+	before := snapshot("before", 1, beforeEntries)
+	after := snapshot("after", 2, afterEntries)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		result, err := (Engine{}).Compare(before, after)
+		if err != nil || len(result.Entries) != 1 {
+			b.Fatalf("entries=%d err=%v", len(result.Entries), err)
+		}
+	}
+}
+
 func TestUncertaintyAndScope(t *testing.T) {
 	before := snapshot("before", 1, nil)
 	before.Header.ScanWarnings = []model.ScanWarning{{Path: "blocked", Operation: "enumerate"}}

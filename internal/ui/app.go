@@ -76,7 +76,7 @@ type App struct {
 	background         bool
 	quitting           bool
 	notify             func(string, string)
-	actions            chan func()
+	actions            *actionQueue
 }
 
 type comparisonState string
@@ -92,7 +92,7 @@ func New(service *app.Service, background bool) *App {
 	fltk.InitStyles()
 	fltk.SetScheme("gtk+")
 	applyTheme()
-	u := &App{service: service, background: background, actions: make(chan func(), 16)}
+	u := &App{service: service, background: background, actions: newActionQueue(16)}
 	u.build()
 	u.bindEvents()
 	u.refreshRoots()
@@ -124,19 +124,11 @@ func (u *App) Run() int {
 // Dispatch queues work for the FLTK-owning thread. Unlike a bare Awake
 // callback, this remains reliable while every FLTK window is hidden.
 func (u *App) Dispatch(action func()) {
-	u.actions <- action
-	fltk.AwakeNullMessage()
+	u.actions.enqueue(action, fltk.AwakeNullMessage)
 }
 
 func (u *App) drainActions() {
-	for {
-		select {
-		case action := <-u.actions:
-			action()
-		default:
-			return
-		}
-	}
+	u.actions.drain()
 }
 
 func (u *App) Show() {
@@ -673,43 +665,11 @@ func (u *App) renderDiff() {
 	u.modifiedSummary.SetLabel(fmt.Sprintf("MODIFIED\n%d", s.Modified))
 	u.deltaSummary.SetLabel("SIZE DELTA\n" + formatBytes(s.NetBytes))
 	u.renderFilterState()
-	query := strings.ToLower(strings.TrimSpace(u.search.Value()))
+	query := strings.TrimSpace(u.search.Value())
 	u.changesCards.clear()
-	matches := func(item model.DiffEntry) bool {
-		if item.Uncertain || item.ScopeDifference || item.Change == model.ChangeUnchanged {
-			return false
-		}
-		if u.filter != "" && item.Change != u.filter {
-			return false
-		}
-		return query == "" || strings.Contains(strings.ToLower(item.DisplayPath), query)
-	}
-	visible := 0
-	for _, item := range u.diff.Entries {
-		if matches(item) {
-			visible++
-		}
-	}
-	pageCount := (visible + resultPageSize - 1) / resultPageSize
-	if pageCount == 0 {
-		u.diffPage = 0
-	} else if u.diffPage >= pageCount {
-		u.diffPage = pageCount - 1
-	}
-	start := u.diffPage * resultPageSize
-	end := minInt(start+resultPageSize, visible)
-	matchedIndex := 0
-	for _, item := range u.diff.Entries {
-		if !matches(item) {
-			continue
-		}
-		if matchedIndex < start {
-			matchedIndex++
-			continue
-		}
-		if matchedIndex >= end {
-			break
-		}
+	page := makeDiffViewPage(u.diff.Entries, u.filter, query, u.diffPage, resultPageSize)
+	u.diffPage = page.Page
+	for _, item := range page.Entries {
 		marker := map[model.ChangeType]string{model.ChangeAdded: "ADDED", model.ChangeRemoved: "REMOVED", model.ChangeModified: "MODIFIED"}[item.Change]
 		entry := item.After
 		if entry == nil {
@@ -721,11 +681,10 @@ func (u *App) renderDiff() {
 				Change: string(item.Change), Directory: entry != nil && entry.Type == model.EntryDirectory,
 			})
 		}, nil)
-		matchedIndex++
 	}
 	u.changesCards.finishBatch()
-	u.renderResultNavigation(visible, start, end)
-	if visible == 0 {
+	u.renderResultNavigation(page.Total, page.Start, page.End)
+	if page.Total == 0 {
 		message := "No changed items in this comparison."
 		if query != "" || u.filter != "" {
 			message = "No changes match the current filter."
@@ -1462,11 +1421,4 @@ func pluralSuffix64(value int64) string {
 		return ""
 	}
 	return "s"
-}
-
-func minInt(left, right int) int {
-	if left < right {
-		return left
-	}
-	return right
 }

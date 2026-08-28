@@ -2,16 +2,56 @@ package cleanup
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"foldersnap/internal/model"
+	"foldersnap/internal/pathutil"
 )
 
 type fakeRecycler struct {
 	fail  bool
 	moved []string
+}
+
+func TestPreflightRejectsReparseAncestorOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "redirect")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	info, err := os.Stat(outsideFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := Candidate{Path: "redirect/outside.txt", Entry: model.SnapshotEntry{RelativePath: "redirect/outside.txt", Type: model.EntryFile, Size: info.Size(), ModifiedUnixNs: info.ModTime().UnixNano()}}
+	result := (Service{RootPath: root}).Preflight(context.Background(), []Candidate{candidate})
+	if len(result) != 1 || result[0].Status != StatusInvalidPath {
+		t.Fatalf("reparse ancestor was not blocked: %+v", result)
+	}
+}
+
+func TestWriteAuditRejectsUnsafeRootID(t *testing.T) {
+	err := WriteAudit(t.TempDir(), `..\outside`, "before", "after", nil)
+	if !errors.Is(err, pathutil.ErrUnsafeStorageID) {
+		t.Fatalf("error = %v, want ErrUnsafeStorageID", err)
+	}
+}
+
+func TestPreflightNeverTargetsWatchedRootItself(t *testing.T) {
+	root := t.TempDir()
+	candidate := Candidate{Path: "", Entry: model.SnapshotEntry{Type: model.EntryDirectory}}
+	result := (Service{RootPath: root}).Preflight(context.Background(), []Candidate{candidate})
+	if len(result) != 1 || result[0].Status != StatusInvalidPath || result[0].Target != "" {
+		t.Fatalf("empty path was not blocked: %+v", result)
+	}
 }
 
 func (f *fakeRecycler) Move(_ context.Context, targets []string) []MoveResult {
@@ -80,9 +120,45 @@ func TestDirectoryIsBlockedWhenSelectedChildChanged(t *testing.T) {
 
 func TestExecuteNeverFallsBack(t *testing.T) {
 	recycler := &fakeRecycler{fail: true}
-	service := Service{RootPath: t.TempDir(), Recycler: recycler}
-	result := service.Execute(context.Background(), []PreflightItem{{Candidate: Candidate{Path: "a"}, Target: "a", Status: StatusReady}})
+	root := t.TempDir()
+	path := filepath.Join(root, "a")
+	if err := os.WriteFile(path, []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := Candidate{Path: "a", Entry: model.SnapshotEntry{RelativePath: "a", Type: model.EntryFile, Size: info.Size(), ModifiedUnixNs: info.ModTime().UnixNano()}}
+	service := Service{RootPath: root, Recycler: recycler}
+	result := service.Execute(context.Background(), service.Preflight(context.Background(), []Candidate{candidate}))
 	if result[0].Status != StatusFailed || len(recycler.moved) != 1 {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestExecuteRevalidatesChangedFileBeforeRecycleBin(t *testing.T) {
+	recycler := &fakeRecycler{}
+	root := t.TempDir()
+	path := filepath.Join(root, "added.txt")
+	if err := os.WriteFile(path, []byte("before"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := Candidate{Path: "added.txt", Entry: model.SnapshotEntry{RelativePath: "added.txt", Type: model.EntryFile, Size: info.Size(), ModifiedUnixNs: info.ModTime().UnixNano()}}
+	service := Service{RootPath: root, Recycler: recycler}
+	preflight := service.Preflight(context.Background(), []Candidate{candidate})
+	if preflight[0].Status != StatusReady {
+		t.Fatalf("initial preflight = %+v", preflight)
+	}
+	if err := os.WriteFile(path, []byte("changed after confirmation"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result := service.Execute(context.Background(), preflight)
+	if result[0].Status != StatusChanged || len(recycler.moved) != 0 {
+		t.Fatalf("changed file was not blocked: result=%+v moved=%v", result, recycler.moved)
 	}
 }

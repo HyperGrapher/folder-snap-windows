@@ -8,6 +8,17 @@ import (
 
 var ErrOutsideRoot = errors.New("path is outside watched root")
 
+var ErrUnsafeStorageID = errors.New("storage identifier is unsafe")
+
+// ValidateStorageID rejects values that could escape a data-directory path
+// when used as a filename or directory component.
+func ValidateStorageID(value string) error {
+	if value == "" || value == "." || value == ".." || filepath.Base(value) != value || strings.ContainsAny(value, `\/:`) || strings.ContainsRune(value, 0) {
+		return ErrUnsafeStorageID
+	}
+	return nil
+}
+
 func NormalizeRoot(p string) (string, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
