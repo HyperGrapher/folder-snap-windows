@@ -3,12 +3,12 @@ package ui
 import "github.com/pwiecz/go-fltk"
 
 const (
-	colorCard         fltk.Color = 0x28282800
-	colorCardSelected fltk.Color = 0x2A383300
-	colorCardBorder   fltk.Color = 0x44444400
-	colorBadgeA       fltk.Color = 0x3F8F7400
-	colorBadgeB       fltk.Color = 0xA8733900
-	colorFolderIcon   fltk.Color = 0xC6964F00
+	colorCard         fltk.Color = colorPanel
+	colorCardSelected fltk.Color = colorRaised
+	colorCardBorder   fltk.Color = colorBorder
+	colorBadgeA       fltk.Color = colorAccent
+	colorBadgeB       fltk.Color = colorRoleB
+	colorFolderIcon   fltk.Color = 0xD6A65700
 )
 
 type cardListEntry struct {
@@ -47,16 +47,18 @@ func (list *cardList) clear() {
 		list.empty = nil
 	}
 	list.scroll.ScrollTo(0, 0)
+	list.scroll.Redraw()
 }
 
-func (list *cardList) add(height int, tooltip string, draw func(*fltk.Button), callback func()) {
-	list.addDeferred(height, tooltip, draw, callback)
+func (list *cardList) add(height int, tooltip string, draw func(*fltk.Button), callback func()) *fltk.Button {
+	button := list.addDeferred(height, tooltip, draw, callback)
 	list.layout()
+	return button
 }
 
 // addDeferred is used when populating a page of cards. Calling layout only
 // once after the batch prevents quadratic main-thread work.
-func (list *cardList) addDeferred(height int, tooltip string, draw func(*fltk.Button), callback func()) {
+func (list *cardList) addDeferred(height int, tooltip string, draw func(*fltk.Button), callback func()) *fltk.Button {
 	list.scroll.Begin()
 	button := fltk.NewButton(0, 0, 100, height, "")
 	button.SetBox(fltk.NO_BOX)
@@ -68,6 +70,7 @@ func (list *cardList) addDeferred(height int, tooltip string, draw func(*fltk.Bu
 	}
 	list.scroll.End()
 	list.entries = append(list.entries, cardListEntry{button: button, height: height})
+	return button
 }
 
 func (list *cardList) finishBatch() { list.layout() }
@@ -90,30 +93,31 @@ func drawChangeCard(button *fltk.Button, card changeCardStyle) {
 		accent, background = 0xC18A4200, colorModifiedCard
 	}
 	fltk.DrawBox(fltk.RFLAT_BOX, x, y, width, height, background)
-	fltk.DrawBox(fltk.ROUNDED_FRAME, x, y, width, height, colorCardBorder)
-	fltk.DrawRectfWithColor(x+1, y+9, 3, height-18, accent)
+	fltk.DrawRectfWithColor(x, y+1, 4, height-2, accent)
 
 	if card.Directory {
-		fltk.DrawRectfWithColor(x+15, y+23, 19, 14, colorFolderIcon)
-		fltk.DrawRectfWithColor(x+17, y+19, 9, 5, colorFolderIcon)
+		fltk.DrawRectfWithColor(x+15, y+20, 17, 12, colorFolderIcon)
+		fltk.DrawRectfWithColor(x+17, y+17, 8, 4, colorFolderIcon)
 	} else {
-		fltk.DrawRectfWithColor(x+17, y+16, 15, 21, colorSecondary)
-		fltk.DrawRectfWithColor(x+20, y+20, 9, 2, background)
-		fltk.DrawRectfWithColor(x+20, y+25, 9, 2, background)
-		fltk.DrawRectfWithColor(x+20, y+30, 7, 2, background)
+		fltk.DrawRectfWithColor(x+17, y+13, 14, 19, colorSecondary)
+		fltk.DrawRectfWithColor(x+20, y+18, 8, 2, background)
+		fltk.DrawRectfWithColor(x+20, y+23, 8, 2, background)
 	}
 
-	statusWidth := 92
-	textWidth := width - 66 - statusWidth
-	fltk.SetDrawColor(colorText)
-	fltk.SetDrawFont(fltk.HELVETICA_BOLD, 13)
-	fltk.Draw(card.Path, x+43, y+7, textWidth, 22, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
-	fltk.SetDrawColor(colorSecondary)
-	fltk.SetDrawFont(fltk.HELVETICA, 11)
-	fltk.Draw(card.Detail, x+43, y+29, textWidth, 18, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+	statusX, statusWidth := x+43, 72
+	fltk.DrawBox(fltk.RFLAT_BOX, statusX, y+12, statusWidth, 22, colorRaised)
 	fltk.SetDrawColor(accent)
-	fltk.SetDrawFont(fltk.HELVETICA_BOLD, 11)
-	fltk.Draw(card.Status, x+width-statusWidth-14, y, statusWidth, height, fltk.ALIGN_RIGHT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+	fltk.SetDrawFont(fltk.HELVETICA_BOLD, 9)
+	fltk.Draw(card.Status, statusX, y+12, statusWidth, 22, fltk.ALIGN_CENTER|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+	detailWidth := 142
+	pathX := statusX + statusWidth + space3
+	textWidth := width - (pathX - x) - detailWidth - space4
+	fltk.SetDrawColor(colorText)
+	fltk.SetDrawFont(fltk.COURIER, textMeta)
+	fltk.Draw(card.Path, pathX, y, textWidth, height, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+	fltk.SetDrawColor(colorSecondary)
+	fltk.SetDrawFont(fltk.COURIER, textSmall)
+	fltk.Draw(card.Detail, x+width-detailWidth-space4, y, detailWidth, height, fltk.ALIGN_RIGHT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
 }
 
 func (list *cardList) showEmpty(message string) {
@@ -201,8 +205,13 @@ type snapshotCardStyle struct {
 func drawSnapshotCard(button *fltk.Button, card snapshotCardStyle) {
 	x, y, width, height := button.X(), button.Y(), button.W(), button.H()
 	background, border := colorCard, colorCardBorder
+	roleColor := colorAccent
+	if card.Role == "B" {
+		roleColor = colorRoleB
+	}
 	if card.Role != "" {
-		background = colorCardSelected
+		background = colorRaised
+		border = roleColor
 	}
 	if card.Selected {
 		border = colorAccent
@@ -211,29 +220,35 @@ func drawSnapshotCard(button *fltk.Button, card snapshotCardStyle) {
 		border = colorRemovedCard
 	}
 	fltk.DrawBox(fltk.RFLAT_BOX, x, y, width, height, background)
-	fltk.DrawBox(fltk.ROUNDED_FRAME, x, y, width, height, border)
+	if card.Role != "" {
+		fltk.DrawRectfWithColor(x, y+1, 3, height-2, roleColor)
+	} else if card.Selected || card.Missing {
+		fltk.DrawBox(fltk.ROUNDED_FRAME, x, y, width, height, border)
+	}
 
-	textWidth := width - 76
+	textWidth := width - 54
 	fltk.SetDrawColor(colorText)
-	fltk.SetDrawFont(fltk.HELVETICA_BOLD, 14)
-	fltk.Draw(card.Date, x+14, y+8, textWidth, 21, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+	fltk.SetDrawFont(fltk.HELVETICA_BOLD, textMeta)
+	fltk.Draw(card.Date, x+12, y+7, textWidth, 20, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
 	fltk.SetDrawColor(colorSecondary)
-	fltk.SetDrawFont(fltk.HELVETICA, 12)
-	fltk.Draw(card.Details, x+14, y+30, textWidth, 18, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+	fltk.SetDrawFont(fltk.HELVETICA, textSmall)
+	fltk.Draw(card.Details, x+12, y+27, textWidth, 17, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
 	if card.Note != "" {
-		fltk.SetDrawFont(fltk.HELVETICA, 11)
-		fltk.Draw(card.Note, x+14, y+48, textWidth, 16, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+		fltk.SetDrawColor(colorDisabled)
+		fltk.SetDrawFont(fltk.HELVETICA, 10)
+		fltk.Draw(card.Note, x+12, y+45, textWidth, 15, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
 	}
 
 	if card.Role != "" {
-		badgeColor := colorBadgeA
-		if card.Role == "B" {
-			badgeColor = colorBadgeB
-		}
-		badgeSize := 30
+		badgeColor := roleColor
+		badgeSize := 22
 		fltk.DrawBox(fltk.OFLAT_BOX, x+width-badgeSize-16, y+(height-badgeSize)/2, badgeSize, badgeSize, badgeColor)
-		fltk.SetDrawColor(colorText)
-		fltk.SetDrawFont(fltk.HELVETICA_BOLD, 13)
+		textColor := colorText
+		if card.Role == "B" {
+			textColor = colorWindow
+		}
+		fltk.SetDrawColor(textColor)
+		fltk.SetDrawFont(fltk.HELVETICA_BOLD, textSmall)
 		fltk.Draw(card.Role, x+width-badgeSize-16, y+(height-badgeSize)/2, badgeSize, badgeSize, fltk.ALIGN_CENTER|fltk.ALIGN_INSIDE)
 	}
 }

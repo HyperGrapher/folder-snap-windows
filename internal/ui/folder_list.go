@@ -5,6 +5,7 @@ import (
 )
 
 type folderRowStyle struct {
+	RootID                             string
 	Name, Path, LastSnapshot, Schedule string
 	SnapshotCount                      int
 	Selected, Unavailable, Archived    bool
@@ -16,6 +17,7 @@ type folderListEntry struct {
 	surface    *fltk.Button
 	history    *fltk.Button
 	settings   *fltk.Button
+	card       *folderRowStyle
 	height     int
 }
 
@@ -51,6 +53,7 @@ func (list *folderList) clear() {
 }
 
 func (list *folderList) add(card folderRowStyle, openHistory, openSettings func()) {
+	cardState := card
 	list.scroll.Begin()
 	group := fltk.NewGroup(0, 0, 100, 86)
 	background := fltk.NewBox(fltk.NO_BOX, 0, 0, 100, 86, "")
@@ -78,7 +81,7 @@ func (list *folderList) add(card folderRowStyle, openHistory, openSettings func(
 		return false
 	})
 	background.SetDrawHandler(func(func()) {
-		drawFolderRow(background.X(), background.Y(), background.W(), background.H(), card, hovered, pressed)
+		drawFolderRow(background.X(), background.Y(), background.W(), background.H(), cardState, hovered, pressed)
 	})
 	surface.SetDrawHandler(func(func()) {})
 	if openHistory != nil {
@@ -96,7 +99,40 @@ func (list *folderList) add(card folderRowStyle, openHistory, openSettings func(
 	}
 	group.End()
 	list.scroll.End()
-	list.entries = append(list.entries, folderListEntry{group: group, background: background, surface: surface, history: history, settings: settings, height: 86})
+	list.entries = append(list.entries, folderListEntry{group: group, background: background, surface: surface, history: history, settings: settings, card: &cardState, height: 86})
+}
+
+// update refreshes rows without replacing their native widgets. Destroying the
+// button that delivered the current click leaves FLTK's process-global pushed
+// widget pointing at a dead control, which suppresses later release callbacks.
+func (list *folderList) update(cards []folderRowStyle) bool {
+	if len(cards) != len(list.entries) {
+		return false
+	}
+	for index, card := range cards {
+		if list.entries[index].card == nil || list.entries[index].card.RootID != card.RootID {
+			return false
+		}
+	}
+	for index, card := range cards {
+		*list.entries[index].card = card
+		list.entries[index].background.Redraw()
+	}
+	return true
+}
+
+func (list *folderList) selectRoot(rootID string) {
+	for index := range list.entries {
+		entry := &list.entries[index]
+		if entry.card == nil {
+			continue
+		}
+		selected := entry.card.RootID == rootID
+		if entry.card.Selected != selected {
+			entry.card.Selected = selected
+			entry.background.Redraw()
+		}
+	}
 }
 
 func (list *folderList) finishBatch() { list.layout() }
@@ -169,12 +205,13 @@ func drawFolderRow(x, y, width, height int, card folderRowStyle, hovered, presse
 	fltk.DrawRectfWithColor(iconX+13, iconY+13, 11, 6, 0xD6A65700)
 
 	contentX := iconX + 58
-	actionsWidth := 164
-	statsWidth := 290
+	// Keep the three metadata columns and the History action on one rhythm.
+	// In particular, the schedule pill has the same 16 px gap on both sides.
+	actionsWidth := 148
+	statsWidth := 310
 	textWidth := width - (contentX - x) - statsWidth - actionsWidth
 	if textWidth < 180 {
 		textWidth = 180
-		statsWidth = 230
 	}
 	fltk.SetDrawColor(colorText)
 	fltk.SetDrawFont(fltk.HELVETICA_BOLD, 15)
@@ -185,8 +222,8 @@ func drawFolderRow(x, y, width, height int, card folderRowStyle, hovered, presse
 
 	statsX := x + width - actionsWidth - statsWidth
 	drawFolderStat(statsX, y+17, 84, intString(card.SnapshotCount), "SNAPSHOTS")
-	drawFolderStat(statsX+96, y+17, 100, card.LastSnapshot, "LAST SNAP")
-	drawSchedulePill(statsX+204, y+29, 86, card.Schedule, card.Archived)
+	drawFolderStat(statsX+100, y+17, 100, card.LastSnapshot, "LAST SNAP")
+	drawSchedulePill(statsX+224, y+29, 86, card.Schedule, card.Archived)
 }
 
 func drawFolderStat(x, y, width int, value, caption string) {

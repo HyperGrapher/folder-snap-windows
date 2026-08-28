@@ -60,58 +60,72 @@ type buttonVisualState struct {
 
 func styledButton(text string, variant buttonVariant) *fltk.Button {
 	button := fltk.NewButton(0, 0, 100, 36, text)
+	decorateButton(button, variant, nil)
+	return button
+}
+
+func placedButton(x, y, width, height int, text string, variant buttonVariant) *fltk.Button {
+	button := fltk.NewButton(x, y, width, height, text)
+	decorateButton(button, variant, nil)
+	return button
+}
+
+func decorateButton(button *fltk.Button, variant buttonVariant, active func() bool) {
 	button.SetBox(fltk.NO_BOX)
 	button.SetDownBox(fltk.NO_BOX)
 	button.ClearVisibleFocus()
 	button.SetLabelFont(fltk.HELVETICA_BOLD)
 	button.SetLabelSize(textMeta)
-	state := &buttonVisualState{}
-	button.SetEventHandler(func(event fltk.Event) bool {
-		switch event {
-		case fltk.ENTER:
-			state.hovered = true
-			button.Redraw()
-		case fltk.LEAVE:
-			state.hovered, state.pressed = false, false
-			button.Redraw()
-		case fltk.PUSH:
-			state.pressed = true
-			button.Redraw()
-		case fltk.RELEASE:
-			state.pressed = false
-			button.Redraw()
-		}
-		return false
-	})
+	state := &buttonVisualState{active: active}
 	button.SetDrawHandler(func(func()) {
+		state.pressed = button.Value()
 		drawStyledButton(button, variant, state)
 	})
-	return button
 }
 
 func styledTab(text string, selected func() bool) *fltk.Button {
-	button := styledButton(text, buttonTab)
-	// The draw handler owns this closure for the lifetime of the navigation.
-	state := &buttonVisualState{active: selected}
-	button.SetEventHandler(func(event fltk.Event) bool {
-		switch event {
-		case fltk.ENTER:
-			state.hovered = true
-			button.Redraw()
-		case fltk.LEAVE:
-			state.hovered, state.pressed = false, false
-			button.Redraw()
-		case fltk.PUSH:
-			state.pressed = true
-			button.Redraw()
-		case fltk.RELEASE:
-			state.pressed = false
-			button.Redraw()
-		}
-		return false
-	})
-	button.SetDrawHandler(func(func()) { drawStyledButton(button, buttonTab, state) })
+	button := fltk.NewButton(0, 0, 100, 36, text)
+	decorateButton(button, buttonTab, selected)
 	return button
+}
+
+func styleCheckButton(button *fltk.CheckButton) {
+	label := button.Label()
+	button.SetBox(fltk.NO_BOX)
+	button.ClearVisibleFocus()
+	button.SetLabel("")
+	button.SetDrawHandler(func(func()) {
+		x, y, height := button.X(), button.Y(), button.H()
+		size := 16
+		checkY := y + (height-size)/2
+		background, border := colorInput, colorBorder
+		if button.Value() {
+			background, border = colorAccent, colorAccent
+		}
+		fltk.DrawBox(fltk.RFLAT_BOX, x, checkY, size, size, background)
+		fltk.DrawBox(fltk.ROUNDED_FRAME, x, checkY, size, size, border)
+		if button.Value() {
+			fltk.DrawCheck(x+2, checkY+2, size-4, size-4, colorText)
+		}
+		fltk.SetDrawColor(colorText)
+		fltk.SetDrawFont(fltk.HELVETICA, textBody)
+		fltk.Draw(label, x+space6, y, button.W()-space6, height, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+	})
+}
+
+func styleInput(input *fltk.Input) {
+	input.SetBox(fltk.RFLAT_BOX)
+	input.SetColor(colorInput)
+	input.SetSelectionColor(colorAccent)
+	input.SetLabelColor(colorText)
+	input.SetDrawHandler(func(baseDraw func()) {
+		baseDraw()
+		border := colorBorder
+		if input.HasFocus() {
+			border = colorAccent
+		}
+		fltk.DrawBox(fltk.ROUNDED_FRAME, input.X(), input.Y(), input.W(), input.H(), border)
+	})
 }
 
 func drawStyledButton(button *fltk.Button, variant buttonVariant, state *buttonVisualState) {
@@ -160,7 +174,11 @@ func drawStyledButton(button *fltk.Button, variant buttonVariant, state *buttonV
 	if !button.IsActive() {
 		background, border, foreground = colorPanel, colorDivider, colorDisabled
 	}
-	fltk.DrawBox(fltk.RFLAT_BOX, x, y, width, height, background)
+	if variant == buttonTab {
+		fltk.DrawRectfWithColor(x, y, width, height-8, background)
+	} else {
+		fltk.DrawBox(fltk.RFLAT_BOX, x, y, width, height, background)
+	}
 	if variant != buttonGhost && variant != buttonTab {
 		fltk.DrawBox(fltk.ROUNDED_FRAME, x, y, width, height, border)
 	}
@@ -169,7 +187,11 @@ func drawStyledButton(button *fltk.Button, variant buttonVariant, state *buttonV
 	}
 	fltk.SetDrawColor(foreground)
 	fltk.SetDrawFont(fltk.HELVETICA_BOLD, textMeta)
-	fltk.Draw(button.Label(), x+space2, y, width-space4, height, fltk.ALIGN_CENTER|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+	textHeight := height
+	if variant == buttonTab {
+		textHeight = height - 8
+	}
+	fltk.Draw(button.Label(), x+space2, y, width-space4, textHeight, fltk.ALIGN_CENTER|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
 }
 
 func panelBox(color fltk.Color) *fltk.Box {
