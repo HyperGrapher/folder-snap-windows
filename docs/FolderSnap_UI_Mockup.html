@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FolderSnap — UI Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600;700&family=Consolas&display=swap" rel="stylesheet">
+<style>
+  /* ═══════════════════════════════════════════
+     TOKENS — exactly matching FolderSnap PRD §12.1
+  ═══════════════════════════════════════════ */
+  :root {
+    --bg-deepest:   #0E1117;
+    --bg-panel:     #161B24;
+    --bg-raised:    #1E2533;
+    --bg-input:     #252D3D;
+    --border:       #2D3748;
+    --border-subtle:#1E2533;
+    --text-primary: #E2E8F0;
+    --text-secondary:#718096;
+    --text-disabled:#3D4A5C;
+    --accent:       #4A90E2;
+    --accent-hover: #5BA3F5;
+    --added:        #38A169;
+    --added-bg:     #1A2E22;
+    --removed:      #E53E3E;
+    --removed-bg:   #2D1515;
+    --modified:     #D69E2E;
+    --modified-bg:  #2D2410;
+    --unchanged:    #4A5568;
+    --warning:      #DD6B20;
+    --destructive:  #FC4444;
+    --radius-sm:    6px;
+    --radius-lg:    9px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: #05060A;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    color: var(--text-primary);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px 60px;
+    min-height: 100vh;
+  }
+
+  /* Mockup meta bar (not part of app — just labels the screen) */
+  .mockup-nav {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+    background: var(--bg-panel);
+    padding: 6px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-subtle);
+  }
+  .mockup-nav button {
+    font-family: 'Segoe UI', sans-serif;
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 8px 16px;
+    border-radius: var(--radius-sm);
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .mockup-nav button:hover { color: var(--text-primary); background: var(--bg-raised); }
+  .mockup-nav button.active { background: var(--accent); color: #fff; }
+
+  .mockup-caption {
+    font-size: 11.5px;
+    color: var(--text-disabled);
+    margin-bottom: 18px;
+    letter-spacing: 0.02em;
+  }
+
+  /* ═══════════════════════════════════════════
+     APP WINDOW FRAME
+  ═══════════════════════════════════════════ */
+  .app-window {
+    width: min(1180px, 95vw);
+    height: 720px;
+    background: var(--bg-deepest);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.55), 0 4px 16px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
+    display: none;
+    flex-direction: column;
+  }
+  .app-window.visible { display: flex; }
+
+  /* Title bar */
+  .titlebar {
+    height: 34px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .titlebar .tb-icon {
+    width: 16px; height: 16px;
+    border-radius: 3px;
+    background: linear-gradient(135deg, var(--accent), #3572B0);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px;
+    flex-shrink: 0;
+  }
+  .titlebar .tb-title {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+  .titlebar .tb-dots {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+  }
+  .titlebar .tb-dot {
+    width: 11px; height: 11px;
+    border-radius: 3px;
+    background: var(--bg-input);
+  }
+
+  /* Top-level tab bar (Folders / History / Settings etc) */
+  .app-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 0 16px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+  .app-tab {
+    padding: 11px 16px 10px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    border-bottom: 2px solid transparent;
+    cursor: default;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .app-tab.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--accent);
+  }
+  .app-tab .badge {
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 10px;
+  }
+  .app-tab.active .badge { background: rgba(74,144,226,0.18); color: var(--accent-hover); }
+
+  .app-body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    background: var(--bg-deepest);
+  }
+
+  /* ═══════════════════════════════════════════
+     SCREEN 1 — FOLDERS LIST
+  ═══════════════════════════════════════════ */
+  .folders-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 24px 14px;
+  }
+  .screen-heading {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.2px;
+  }
+  .screen-sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 3px;
+  }
+
+  .btn {
+    font-family: 'Segoe UI', sans-serif;
+    font-size: 12.5px;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    padding: 9px 16px;
+    border: 1px solid transparent;
+    cursor: default;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+    white-space: nowrap;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 2px 10px rgba(74,144,226,0.25);
+  }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-secondary {
+    background: transparent;
+    border-color: var(--border);
+    color: var(--text-primary);
+  }
+  .btn-secondary:hover { border-color: var(--accent); background: rgba(74,144,226,0.06); }
+  .btn-destructive { background: var(--destructive); color: #fff; }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 7px 10px;
+  }
+  .btn-ghost:hover { color: var(--text-primary); background: var(--bg-raised); }
+  .btn-sm { padding: 6px 12px; font-size: 11.5px; }
+
+  .folders-list {
+    padding: 4px 24px 24px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .folder-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .folder-card:hover { border-color: var(--border); background: var(--bg-raised); }
+
+  .folder-icon {
+    width: 42px; height: 42px;
+    border-radius: 10px;
+    background: linear-gradient(145deg, #1E2939, #161D29);
+    border: 1px solid var(--border-subtle);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 19px;
+    flex-shrink: 0;
+  }
+
+  .folder-info { flex: 1; min-width: 0; }
+  .folder-name { font-size: 14.5px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
+  .folder-path {
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .folder-stats {
+    display: flex;
+    gap: 26px;
+    flex-shrink: 0;
+  }
+  .fstat { text-align: right; }
+  .fstat .fstat-val { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+  .fstat .fstat-lbl { font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 1px; }
+
+  .schedule-pill {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: rgba(74,144,226,0.12);
+    color: var(--accent-hover);
+    border: 1px solid rgba(74,144,226,0.25);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .schedule-pill.manual {
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border-color: var(--border);
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--added);
+    flex-shrink: 0;
+    box-shadow: 0 0 6px rgba(56,161,105,0.6);
+  }
+  .status-dot.warn { background: var(--warning); box-shadow: 0 0 6px rgba(221,107,32,0.6); }
+
+  .folder-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+  /* ═══════════════════════════════════════════
+     SCREEN 2 — HISTORY & COMPARE
+  ═══════════════════════════════════════════ */
+  .hc-sidebar {
+    width: 300px;
+    flex-shrink: 0;
+    background: var(--bg-panel);
+    border-right: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .hc-sidebar-head {
+    padding: 18px 18px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .hc-sidebar-title { font-size: 13.5px; font-weight: 700; margin-bottom: 3px; }
+  .hc-sidebar-sub { font-size: 11px; color: var(--text-secondary); }
+
+  .snap-list {
+    overflow-y: auto;
+    padding: 10px 10px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .snap-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    border-left: 3px solid transparent;
+    cursor: default;
+    transition: background 0.13s;
+  }
+  .snap-row:hover { background: var(--bg-raised); }
+  .snap-row.sel-a { background: rgba(74,144,226,0.1); border-left-color: var(--accent); }
+  .snap-row.sel-b { background: rgba(93,219,200,0.08); border-left-color: #5DDBC8; }
+
+  .snap-check {
+    width: 17px; height: 17px;
+    border-radius: 4px;
+    border: 1.5px solid var(--border);
+    background: var(--bg-input);
+    flex-shrink: 0;
+  }
+  .snap-row.sel-a .snap-check { background: var(--accent); border-color: var(--accent); }
+  .snap-row.sel-b .snap-check { background: #5DDBC8; border-color: #5DDBC8; }
+
+  .snap-body { flex: 1; min-width: 0; }
+  .snap-date { font-size: 12.5px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 6px; }
+  .snap-desc { font-size: 11px; color: var(--text-secondary); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .snap-desc.none { color: var(--text-disabled); font-style: italic; }
+  .snap-meta { font-size: 10.5px; color: var(--text-disabled); margin-top: 3px; }
+
+  .type-pill {
+    font-size: 9px; font-weight: 700; letter-spacing: 0.04em;
+    padding: 1px 6px; border-radius: 8px;
+    background: var(--bg-input); color: var(--text-secondary);
+  }
+
+  .ab-chip {
+    font-size: 9.5px; font-weight: 800;
+    width: 18px; height: 18px;
+    border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .ab-chip.a { background: var(--accent); color: #fff; }
+  .ab-chip.b { background: #5DDBC8; color: #06231F; }
+
+  /* Compare button footer */
+  .hc-sidebar-footer {
+    margin-top: auto;
+    padding: 14px 18px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .hc-sidebar-footer .btn { width: 100%; justify-content: center; }
+
+  /* Right: diff content */
+  .hc-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .diff-header {
+    padding: 20px 28px 0;
+    flex-shrink: 0;
+  }
+  .diff-title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .diff-title-row .from { color: var(--accent-hover); font-weight: 700; }
+  .diff-title-row .to { color: #5DDBC8; font-weight: 700; }
+  .diff-title-row .arrow { color: var(--text-disabled); }
+  .diff-title-row h2 { font-size: 16px; font-weight: 700; margin: 0; }
+
+  /* Summary dashboard */
+  .summary-dash {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .sum-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+    position: relative;
+    overflow: hidden;
+  }
+  .sum-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+  .sum-card.added::before    { background: var(--added); }
+  .sum-card.removed::before  { background: var(--removed); }
+  .sum-card.modified::before { background: var(--modified); }
+  .sum-card.unchanged::before{ background: var(--unchanged); }
+
+  .sum-num { font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 6px; }
+  .sum-card.added .sum-num    { color: var(--added); }
+  .sum-card.removed .sum-num  { color: var(--removed); }
+  .sum-card.modified .sum-num { color: var(--modified); }
+  .sum-card.unchanged .sum-num{ color: var(--unchanged); }
+  .sum-lbl {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-secondary);
+  }
+  .sum-delta {
+    font-size: 10.5px;
+    color: var(--text-disabled);
+    margin-top: 4px;
+    font-family: Consolas, monospace;
+  }
+
+  .delta-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 18px;
+    font-family: Consolas, monospace;
+  }
+  .delta-banner strong { color: var(--added); font-weight: 700; }
+
+  /* Filter tabs + search */
+  .diff-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 28px 14px;
+    flex-shrink: 0;
+  }
+  .filter-pills { display: flex; gap: 6px; }
+  .filter-pill {
+    font-size: 12px; font-weight: 600;
+    padding: 7px 14px;
+    border-radius: 20px;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .filter-pill.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .filter-pill .dot { width: 6px; height: 6px; border-radius: 50%; }
+
+  .search-box {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 7px 12px;
+    font-size: 12px;
+    color: var(--text-disabled);
+    min-width: 220px;
+  }
+
+  .diff-list-wrap {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 28px 20px;
+  }
+
+  .diff-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 14px;
+    border-radius: var(--radius-sm);
+    border-left: 4px solid transparent;
+    margin-bottom: 2px;
+  }
+  .diff-row.added    { background: var(--added-bg);    border-left-color: var(--added); }
+  .diff-row.removed  { background: var(--removed-bg);  border-left-color: var(--removed); }
+  .diff-row.modified { background: var(--modified-bg); border-left-color: var(--modified); }
+
+  .diff-row .dicon { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
+  .diff-row.added .dicon    { color: var(--added); }
+  .diff-row.removed .dicon  { color: var(--removed); }
+  .diff-row.modified .dicon { color: var(--modified); }
+
+  .diff-path {
+    font-family: Consolas, monospace;
+    font-size: 12.5px;
+    color: var(--text-primary);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+  }
+
+  .diff-size {
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    min-width: 130px;
+    text-align: right;
+  }
+  .diff-size .old { color: var(--text-disabled); text-decoration: line-through; margin-right: 6px; }
+
+  .diff-badge-type {
+    font-size: 9px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 10px;
+    flex-shrink: 0; width: 66px; text-align: center;
+  }
+  .diff-row.added .diff-badge-type    { background: rgba(56,161,105,0.15); color: var(--added); }
+  .diff-row.removed .diff-badge-type  { background: rgba(229,62,62,0.15); color: var(--removed); }
+  .diff-row.modified .diff-badge-type { background: rgba(214,158,46,0.15); color: var(--modified); }
+
+  /* ═══════════════════════════════════════════
+     SCREEN 3 — DELETION PANEL
+  ═══════════════════════════════════════════ */
+  .del-header {
+    padding: 20px 28px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+  .del-header h2 { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+  .del-header p { font-size: 12.5px; color: var(--text-secondary); line-height: 1.6; margin: 0; }
+  .del-header .hl { color: var(--text-primary); font-weight: 600; }
+
+  .del-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 28px;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+  .del-count {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-family: Consolas, monospace;
+  }
+  .del-count strong { color: var(--text-primary); }
+
+  .tree-wrap {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 28px 20px;
+  }
+
+  .tree-node { margin-bottom: 1px; }
+  .tree-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 10px;
+    border-radius: 5px;
+  }
+  .tree-row:hover { background: var(--bg-raised); }
+
+  .tcheck {
+    width: 16px; height: 16px;
+    border-radius: 4px;
+    border: 1.5px solid var(--border);
+    background: var(--bg-input);
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px;
+    color: #fff;
+  }
+  .tcheck.checked { background: var(--accent); border-color: var(--accent); }
+  .tcheck.indeterminate { background: var(--accent); border-color: var(--accent); opacity: 0.55; }
+
+  .tree-chevron { color: var(--text-disabled); font-size: 10px; width: 10px; flex-shrink: 0; }
+  .tree-icon { font-size: 13px; width: 18px; flex-shrink: 0; text-align: center; }
+  .tree-name { font-family: Consolas, monospace; font-size: 12.5px; color: var(--text-primary); flex: 1; }
+  .tree-name.dim { color: var(--text-secondary); }
+  .tree-size { font-family: Consolas, monospace; font-size: 10.5px; color: var(--text-disabled); }
+
+  .tree-children { padding-left: 26px; border-left: 1px solid var(--border-subtle); margin-left: 18px; }
+
+  .del-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 28px;
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-panel);
+    flex-shrink: 0;
+  }
+  .del-footer-info { font-size: 12px; color: var(--text-secondary); }
+  .del-footer-info strong { color: var(--destructive); font-family: Consolas, monospace; }
+
+  .modified-reminder {
+    margin: 0 28px 16px;
+    padding: 12px 16px;
+    background: var(--modified-bg);
+    border: 1px solid rgba(214,158,46,0.25);
+    border-left: 3px solid var(--modified);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    flex-shrink: 0;
+  }
+  .modified-reminder strong { color: var(--modified); }
+</style>
+</head>
+<body>
+
+<div class="mockup-nav">
+  <button class="active" data-target="screen-folders">1 · Folders List</button>
+  <button data-target="screen-history">2 · History &amp; Compare</button>
+  <button data-target="screen-deletion">3 · Deletion Panel</button>
+</div>
+<div class="mockup-caption">FolderSnap — dark theme mockup · Segoe UI · tokens per PRD §12.1 · not functional, visual reference only</div>
+
+<!-- ═══════════════════════════════ SCREEN 1 — FOLDERS ═══════════════════════════════ -->
+<div class="app-window visible" id="screen-folders">
+  <div class="titlebar">
+    <div class="tb-icon">📁</div>
+    <div class="tb-title">FolderSnap</div>
+    <div class="tb-dots"><div class="tb-dot"></div><div class="tb-dot"></div><div class="tb-dot"></div></div>
+  </div>
+  <div class="app-tabs">
+    <div class="app-tab active">Folders <span class="badge">4</span></div>
+    <div class="app-tab">History &amp; Compare</div>
+    <div class="app-tab">Settings</div>
+  </div>
+  <div class="app-body" style="flex-direction:column;">
+    <div class="folders-toolbar">
+      <div>
+        <div class="screen-heading">Watched Folders</div>
+        <div class="screen-sub">4 folders · 212 snapshots total · 38.4 MB stored</div>
+      </div>
+      <button class="btn btn-primary">＋&nbsp; Add Folder</button>
+    </div>
+
+    <div class="folders-list">
+
+      <div class="folder-card">
+        <div class="status-dot"></div>
+        <div class="folder-icon">🗂️</div>
+        <div class="folder-info">
+          <div class="folder-name">MyApp</div>
+          <div class="folder-path">C:\Users\Burak\Projects\MyApp</div>
+        </div>
+        <div class="folder-stats">
+          <div class="fstat"><div class="fstat-val">47</div><div class="fstat-lbl">Snapshots</div></div>
+          <div class="fstat"><div class="fstat-val">12m ago</div><div class="fstat-lbl">Last Snap</div></div>
+        </div>
+        <div class="schedule-pill">Every 6 hours</div>
+        <div class="folder-actions">
+          <button class="btn btn-secondary btn-sm">History</button>
+          <button class="btn btn-ghost">⋯</button>
+        </div>
+      </div>
+
+      <div class="folder-card">
+        <div class="status-dot"></div>
+        <div class="folder-icon">📦</div>
+        <div class="folder-info">
+          <div class="folder-name">Client Deliverables</div>
+          <div class="folder-path">D:\Work\ClientDeliverables</div>
+        </div>
+        <div class="folder-stats">
+          <div class="fstat"><div class="fstat-val">124</div><div class="fstat-lbl">Snapshots</div></div>
+          <div class="fstat"><div class="fstat-val">1d ago</div><div class="fstat-lbl">Last Snap</div></div>
+        </div>
+        <div class="schedule-pill">Every day</div>
+        <div class="folder-actions">
+          <button class="btn btn-secondary btn-sm">History</button>
+          <button class="btn btn-ghost">⋯</button>
+        </div>
+      </div>
+
+      <div class="folder-card">
+        <div class="status-dot warn"></div>
+        <div class="folder-icon">💾</div>
+        <div class="folder-info">
+          <div class="folder-name">Backup Drive Archive</div>
+          <div class="folder-path">E:\Archive — drive not connected</div>
+        </div>
+        <div class="folder-stats">
+          <div class="fstat"><div class="fstat-val">31</div><div class="fstat-lbl">Snapshots</div></div>
+          <div class="fstat"><div class="fstat-val">9d ago</div><div class="fstat-lbl">Last Snap</div></div>
+        </div>
+        <div class="schedule-pill manual">Manual only</div>
+        <div class="folder-actions">
+          <button class="btn btn-secondary btn-sm">History</button>
+          <button class="btn btn-ghost">⋯</button>
+        </div>
+      </div>
+
+      <div class="folder-card">
+        <div class="status-dot"></div>
+        <div class="folder-icon">🧾</div>
+        <div class="folder-info">
+          <div class="folder-name">Dotfiles</div>
+          <div class="folder-path">C:\Users\Burak\.config</div>
+        </div>
+        <div class="folder-stats">
+          <div class="fstat"><div class="fstat-val">10</div><div class="fstat-lbl">Snapshots</div></div>
+          <div class="fstat"><div class="fstat-val">3h ago</div><div class="fstat-lbl">Last Snap</div></div>
+        </div>
+        <div class="schedule-pill">Every week</div>
+        <div class="folder-actions">
+          <button class="btn btn-secondary btn-sm">History</button>
+          <button class="btn btn-ghost">⋯</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SCREEN 2 — HISTORY & COMPARE ═══════════════════════════════ -->
+<div class="app-window" id="screen-history">
+  <div class="titlebar">
+    <div class="tb-icon">📁</div>
+    <div class="tb-title">FolderSnap — MyApp — History &amp; Compare</div>
+    <div class="tb-dots"><div class="tb-dot"></div><div class="tb-dot"></div><div class="tb-dot"></div></div>
+  </div>
+  <div class="app-tabs">
+    <div class="app-tab">Folders</div>
+    <div class="app-tab active">History &amp; Compare</div>
+    <div class="app-tab">Settings</div>
+  </div>
+  <div class="app-body">
+
+    <div class="hc-sidebar">
+      <div class="hc-sidebar-head">
+        <div class="hc-sidebar-title">MyApp</div>
+        <div class="hc-sidebar-sub">47 snapshots · newest first</div>
+      </div>
+      <div class="snap-list">
+
+        <div class="snap-row sel-b">
+          <div class="ab-chip b">B</div>
+          <div class="snap-body">
+            <div class="snap-date">Aug 22, 2025 · 14:30 <span class="type-pill">SCHEDULED</span></div>
+            <div class="snap-desc">Pre-release check before v2.4 tag</div>
+            <div class="snap-meta">1,923 files · 45.1 MB</div>
+          </div>
+        </div>
+
+        <div class="snap-row">
+          <div class="snap-check"></div>
+          <div class="snap-body">
+            <div class="snap-date">Aug 19, 2025 · 09:00 <span class="type-pill">SCHEDULED</span></div>
+            <div class="snap-desc none">No description</div>
+            <div class="snap-meta">1,889 files · 44.6 MB</div>
+          </div>
+        </div>
+
+        <div class="snap-row sel-a">
+          <div class="ab-chip a">A</div>
+          <div class="snap-body">
+            <div class="snap-date">Aug 15, 2025 · 14:30 <span class="type-pill">MANUAL</span></div>
+            <div class="snap-desc">Baseline before onboarding rewrite</div>
+            <div class="snap-meta">1,847 files · 43.9 MB</div>
+          </div>
+        </div>
+
+        <div class="snap-row">
+          <div class="snap-check"></div>
+          <div class="snap-body">
+            <div class="snap-date">Aug 12, 2025 · 09:00 <span class="type-pill">SCHEDULED</span></div>
+            <div class="snap-desc none">No description</div>
+            <div class="snap-meta">1,802 files · 42.1 MB</div>
+          </div>
+        </div>
+
+        <div class="snap-row">
+          <div class="snap-check"></div>
+          <div class="snap-body">
+            <div class="snap-date">Aug 8, 2025 · 09:00 <span class="type-pill">SCHEDULED</span></div>
+            <div class="snap-desc none">No description</div>
+            <div class="snap-meta">1,780 files · 41.8 MB</div>
+          </div>
+        </div>
+
+        <div class="snap-row">
+          <div class="snap-check"></div>
+          <div class="snap-body">
+            <div class="snap-date">Aug 1, 2025 · 09:00 <span class="type-pill">MANUAL</span></div>
+            <div class="snap-desc">Initial project snapshot</div>
+            <div class="snap-meta">1,650 files · 38.2 MB</div>
+          </div>
+        </div>
+
+      </div>
+      <div class="hc-sidebar-footer">
+        <button class="btn btn-primary">Compare A → B</button>
+      </div>
+    </div>
+
+    <div class="hc-content">
+      <div class="diff-header">
+        <div class="diff-title-row">
+          <span class="from">Aug 15</span>
+          <span class="arrow">→</span>
+          <span class="to">Aug 22</span>
+          <h2>&nbsp;— what changed</h2>
+        </div>
+
+        <div class="summary-dash">
+          <div class="sum-card added">
+            <div class="sum-num">76</div>
+            <div class="sum-lbl">Added</div>
+            <div class="sum-delta">+4.8 MB</div>
+          </div>
+          <div class="sum-card removed">
+            <div class="sum-num">12</div>
+            <div class="sum-lbl">Removed</div>
+            <div class="sum-delta">−1.1 MB</div>
+          </div>
+          <div class="sum-card modified">
+            <div class="sum-num">34</div>
+            <div class="sum-lbl">Modified</div>
+            <div class="sum-delta">±620 KB</div>
+          </div>
+          <div class="sum-card unchanged">
+            <div class="sum-num">1,801</div>
+            <div class="sum-lbl">Unchanged</div>
+            <div class="sum-delta">not shown below</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="diff-controls">
+        <div class="filter-pills">
+          <div class="filter-pill active">All Changes</div>
+          <div class="filter-pill"><span class="dot" style="background:var(--added)"></span>Added</div>
+          <div class="filter-pill"><span class="dot" style="background:var(--removed)"></span>Removed</div>
+          <div class="filter-pill"><span class="dot" style="background:var(--modified)"></span>Modified</div>
+        </div>
+        <div class="search-box">🔍&nbsp; Search changed files…</div>
+        <button class="btn btn-secondary btn-sm">🗑&nbsp; Delete New Items</button>
+      </div>
+
+      <div class="diff-list-wrap">
+
+        <div class="diff-row added">
+          <span class="dicon">＋</span>
+          <span class="diff-badge-type">ADDED</span>
+          <span class="diff-path">…/src/components/OnboardingView.swift</span>
+          <span class="diff-size">4.2 KB</span>
+        </div>
+        <div class="diff-row added">
+          <span class="dicon">＋</span>
+          <span class="diff-badge-type">ADDED</span>
+          <span class="diff-path">…/resources/icons/onboarding-01.png</span>
+          <span class="diff-size">128 KB</span>
+        </div>
+        <div class="diff-row added">
+          <span class="dicon">＋</span>
+          <span class="diff-badge-type">ADDED</span>
+          <span class="diff-path">…/resources/icons/onboarding-02.png</span>
+          <span class="diff-size">131 KB</span>
+        </div>
+        <div class="diff-row modified">
+          <span class="dicon">✎</span>
+          <span class="diff-badge-type">MODIFIED</span>
+          <span class="diff-path">…/Package.resolved</span>
+          <span class="diff-size"><span class="old">3.1 KB</span>3.4 KB</span>
+        </div>
+        <div class="diff-row modified">
+          <span class="dicon">✎</span>
+          <span class="diff-badge-type">MODIFIED</span>
+          <span class="diff-path">…/src/App/ContentView.swift</span>
+          <span class="diff-size"><span class="old">8.7 KB</span>11.2 KB</span>
+        </div>
+        <div class="diff-row removed">
+          <span class="dicon">−</span>
+          <span class="diff-badge-type">REMOVED</span>
+          <span class="diff-path">…/src/Legacy/OldHelper.swift</span>
+          <span class="diff-size">2.9 KB</span>
+        </div>
+        <div class="diff-row removed">
+          <span class="dicon">−</span>
+          <span class="diff-badge-type">REMOVED</span>
+          <span class="diff-path">…/config/deprecated.json</span>
+          <span class="diff-size">640 B</span>
+        </div>
+        <div class="diff-row added">
+          <span class="dicon">＋</span>
+          <span class="diff-badge-type">ADDED</span>
+          <span class="diff-path">…/tests/OnboardingViewTests.swift</span>
+          <span class="diff-size">6.8 KB</span>
+        </div>
+        <div class="diff-row modified">
+          <span class="dicon">✎</span>
+          <span class="diff-badge-type">MODIFIED</span>
+          <span class="diff-path">…/README.md</span>
+          <span class="diff-size"><span class="old">5.4 KB</span>6.0 KB</span>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SCREEN 3 — DELETION PANEL ═══════════════════════════════ -->
+<div class="app-window" id="screen-deletion">
+  <div class="titlebar">
+    <div class="tb-icon">📁</div>
+    <div class="tb-title">FolderSnap — MyApp — Delete New Items</div>
+    <div class="tb-dots"><div class="tb-dot"></div><div class="tb-dot"></div><div class="tb-dot"></div></div>
+  </div>
+  <div class="app-tabs">
+    <div class="app-tab">Folders</div>
+    <div class="app-tab active">History &amp; Compare</div>
+    <div class="app-tab">Settings</div>
+  </div>
+  <div class="app-body" style="flex-direction:column;">
+
+    <div class="del-header">
+      <h2>Delete newly created items</h2>
+      <p>The following items were created between <span class="hl">Aug 15</span> and <span class="hl">Aug 22</span>. Select items below to permanently delete them. Modified and removed items are never affected by this action.</p>
+    </div>
+
+    <div class="del-toolbar">
+      <button class="btn btn-secondary btn-sm">Select All</button>
+      <button class="btn btn-secondary btn-sm">Deselect All</button>
+      <div class="del-count"><strong>4 items</strong> selected · <strong style="color:var(--text-primary)">263 KB</strong></div>
+    </div>
+
+    <div class="tree-wrap">
+
+      <div class="tree-node">
+        <div class="tree-row">
+          <span class="tcheck indeterminate">–</span>
+          <span class="tree-chevron">▾</span>
+          <span class="tree-icon">📁</span>
+          <span class="tree-name">resources/icons</span>
+        </div>
+        <div class="tree-children">
+          <div class="tree-row">
+            <span class="tcheck checked">✓</span>
+            <span class="tree-chevron"></span>
+            <span class="tree-icon">🖼️</span>
+            <span class="tree-name">onboarding-01.png</span>
+            <span class="tree-size">128 KB</span>
+          </div>
+          <div class="tree-row">
+            <span class="tcheck"></span>
+            <span class="tree-chevron"></span>
+            <span class="tree-icon">🖼️</span>
+            <span class="tree-name dim">onboarding-02.png</span>
+            <span class="tree-size">131 KB</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="tree-node">
+        <div class="tree-row">
+          <span class="tcheck checked">✓</span>
+          <span class="tree-chevron">▾</span>
+          <span class="tree-icon">📁</span>
+          <span class="tree-name">src/components</span>
+        </div>
+        <div class="tree-children">
+          <div class="tree-row">
+            <span class="tcheck checked">✓</span>
+            <span class="tree-chevron"></span>
+            <span class="tree-icon">📄</span>
+            <span class="tree-name">OnboardingView.swift</span>
+            <span class="tree-size">4.2 KB</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="tree-node">
+        <div class="tree-row">
+          <span class="tcheck checked">✓</span>
+          <span class="tree-chevron"></span>
+          <span class="tree-icon">📄</span>
+          <span class="tree-name">tests/OnboardingViewTests.swift</span>
+          <span class="tree-size">6.8 KB</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="modified-reminder">
+      <strong>Reminder:</strong> 34 files were modified in this period (e.g. <code>Package.resolved</code>, <code>ContentView.swift</code>) — these existed before and are never deleted by this action.
+    </div>
+
+    <div class="del-footer">
+      <div class="del-footer-info">This action <strong>cannot be undone</strong>.</div>
+      <div style="display:flex; gap:10px;">
+        <button class="btn btn-secondary">Cancel</button>
+        <button class="btn btn-destructive">Delete Selected (4 items)</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const buttons = document.querySelectorAll('.mockup-nav button');
+  const screens = document.querySelectorAll('.app-window');
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      buttons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      screens.forEach(s => s.classList.remove('visible'));
+      document.getElementById(btn.dataset.target).classList.add('visible');
+    });
+  });
+</script>
+</body>
+</html>

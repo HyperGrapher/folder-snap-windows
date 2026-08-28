@@ -23,29 +23,20 @@ const WindowTitle = "FolderSnap"
 
 const resultPageSize = 200
 
-const (
-	colorWindow       fltk.Color = 0x17171700
-	colorPanel        fltk.Color = 0x20202000
-	colorRaised       fltk.Color = 0x2B2B2B00
-	colorInput        fltk.Color = 0x29292900
-	colorSelection    fltk.Color = 0x3A3A3A00
-	colorDivider      fltk.Color = 0x38383800
-	colorText         fltk.Color = 0xF1F1F100
-	colorSecondary    fltk.Color = 0xB8B8B800
-	colorAccent       fltk.Color = 0x34775E00
-	colorAddedCard    fltk.Color = 0x21312800
-	colorRemovedCard  fltk.Color = 0x38242400
-	colorModifiedCard fltk.Color = 0x392F2000
-)
-
 type App struct {
 	service *app.Service
 	window  *fltk.Window
 	status  *fltk.Box
 
-	rootsCards      *cardList
+	rootsCards      *folderList
 	timelineCards   *cardList
 	changesCards    *cardList
+	foldersPage     *fltk.Group
+	historyPage     *fltk.Group
+	foldersTab      *fltk.Button
+	historyTab      *fltk.Button
+	settingsTab     *fltk.Button
+	foldersSummary  *fltk.Box
 	search          *fltk.Input
 	summary         *fltk.Box
 	addedSummary    *fltk.Box
@@ -77,7 +68,15 @@ type App struct {
 	quitting           bool
 	notify             func(string, string)
 	actions            *actionQueue
+	activeScreen       screenID
 }
+
+type screenID string
+
+const (
+	screenFolders screenID = "folders"
+	screenHistory screenID = "history"
+)
 
 type comparisonState string
 
@@ -149,77 +148,96 @@ func (u *App) ShowSettings()                           { u.Show(); u.showSetting
 func (u *App) SetNotifier(notify func(string, string)) { u.notify = notify }
 
 func (u *App) build() {
-	u.window = fltk.NewWindow(1200, 760, WindowTitle)
+	u.window = fltk.NewWindow(1180, 720, WindowTitle)
 	u.window.SetColor(colorWindow)
-	u.window.SetSizeRange(980, 640, 0, 0, 0, 0, false)
+	u.window.SetSizeRange(900, 600, 0, 0, 0, 0, false)
 	platform.ApplyDarkTitleBar(u.window.RawHandle())
 	if icon, err := newFolderSnapIcon(); err == nil {
 		u.window.SetIcons([]*fltk.RgbImage{icon})
 	}
 
-	outer := fltk.NewFlex(0, 0, 1200, 760)
+	outer := fltk.NewFlex(0, 0, 1180, 720)
 	outer.SetType(fltk.COLUMN)
-	outer.SetGap(1)
-	outer.SetColor(colorDivider)
-	top := fltk.NewFlex(0, 0, 1200, 58)
-	top.SetType(fltk.ROW)
-	top.SetMargin(12, 9)
-	top.SetColor(colorPanel)
-	toolbarIcon := fltk.NewBox(fltk.NO_BOX, 0, 0, 34, 40, "")
+	outer.SetGap(0)
+	outer.SetColor(colorWindow)
+
+	navigation := fltk.NewFlex(0, 0, 1180, 46)
+	navigation.SetType(fltk.ROW)
+	navigation.SetMargin(space4, 0)
+	navigation.SetGap(space1)
+	navigation.SetColor(colorPanel)
+	toolbarIcon := fltk.NewBox(fltk.NO_BOX, 0, 0, 28, 46, "")
 	if icon, err := newFolderSnapIcon(); err == nil {
-		icon.Scale(30, 30, true, true)
+		icon.Scale(24, 24, true, true)
 		toolbarIcon.SetImage(icon)
 	}
 	toolbarIcon.SetAlign(fltk.ALIGN_CENTER | fltk.ALIGN_INSIDE)
-	title := label("FolderSnap", 20, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
-	u.status = label("Ready", 12, fltk.ALIGN_RIGHT|fltk.ALIGN_INSIDE)
-	add := button("Add Folder")
-	u.snapshotButton = button("Snapshot Now")
-	u.snapshotButton.Deactivate()
-	settings := button("Settings")
-	top.Fixed(toolbarIcon, 38)
-	top.Fixed(title, 142)
-	top.Fixed(u.status, 360)
-	top.Fixed(add, 110)
-	top.Fixed(u.snapshotButton, 130)
-	top.Fixed(settings, 90)
-	top.End()
-	outer.Fixed(top, 58)
+	title := label("FolderSnap", textBody, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
+	title.SetLabelFont(fltk.HELVETICA_BOLD)
+	u.activeScreen = screenFolders
+	u.foldersTab = styledTab("Folders", func() bool { return u.activeScreen == screenFolders })
+	u.historyTab = styledTab("History & Compare", func() bool { return u.activeScreen == screenHistory })
+	u.settingsTab = styledTab("Settings", func() bool { return false })
+	u.status = label("Ready", textSmall, fltk.ALIGN_RIGHT|fltk.ALIGN_INSIDE)
+	u.status.SetLabelColor(colorSecondary)
+	navigation.Fixed(toolbarIcon, 32)
+	navigation.Fixed(title, 100)
+	navigation.Fixed(u.foldersTab, 92)
+	navigation.Fixed(u.historyTab, 142)
+	navigation.Fixed(u.settingsTab, 84)
+	navigation.Fixed(u.status, 220)
+	navigation.End()
+	outer.Fixed(navigation, 46)
 
-	content := fltk.NewFlex(0, 59, 1200, 701)
-	content.SetType(fltk.ROW)
-	content.SetGap(1)
-	content.SetColor(colorDivider)
-	left := fltk.NewFlex(0, 59, 265, 701)
-	left.SetType(fltk.COLUMN)
-	left.SetMargin(14, 12)
-	left.SetColor(colorPanel)
-	leftTitle := label("FOLDERS", 14, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
-	leftSubtitle := label("Folders available for snapshot history", 11, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
-	leftSubtitle.SetLabelColor(colorSecondary)
-	u.rootsCards = newCardList(0, 0, 265, 590)
-	rootSettings := button("Folder Settings")
-	left.Fixed(leftTitle, 25)
-	left.Fixed(leftSubtitle, 30)
-	left.Fixed(rootSettings, 38)
-	left.End()
-	content.Fixed(left, 270)
+	u.foldersPage = fltk.NewGroup(0, 46, 1180, 674)
+	u.foldersPage.SetBox(fltk.FLAT_BOX)
+	u.foldersPage.SetColor(colorWindow)
+	foldersLayout := fltk.NewFlex(0, 46, 1180, 674)
+	foldersLayout.SetType(fltk.COLUMN)
+	foldersLayout.SetColor(colorWindow)
+	foldersHeader := fltk.NewFlex(0, 46, 1180, 86)
+	foldersHeader.SetType(fltk.ROW)
+	foldersHeader.SetMargin(space6, space4)
+	foldersHeader.SetColor(colorWindow)
+	headingBlock := fltk.NewFlex(0, 0, 800, 56)
+	headingBlock.SetType(fltk.COLUMN)
+	headingBlock.SetGap(space1)
+	headingBlock.SetColor(colorWindow)
+	heading := label("Watched Folders", textHeading, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
+	heading.SetLabelFont(fltk.HELVETICA_BOLD)
+	u.foldersSummary = label("", textMeta, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
+	u.foldersSummary.SetLabelColor(colorSecondary)
+	headingBlock.Fixed(heading, 26)
+	headingBlock.End()
+	add := styledButton("＋  Add Folder", buttonPrimary)
+	foldersHeader.Fixed(add, 126)
+	foldersHeader.End()
+	u.rootsCards = newFolderList(0, 132, 1180, 588)
+	foldersLayout.Fixed(foldersHeader, 86)
+	foldersLayout.End()
+	u.foldersPage.End()
 
-	right := fltk.NewFlex(271, 59, 929, 701)
+	u.historyPage = fltk.NewGroup(0, 46, 1180, 674)
+	u.historyPage.SetBox(fltk.FLAT_BOX)
+	u.historyPage.SetColor(colorWindow)
+	right := fltk.NewFlex(0, 46, 1180, 674)
 	right.SetType(fltk.COLUMN)
-	right.SetMargin(16, 12)
-	right.SetGap(8)
-	right.SetColor(colorPanel)
+	right.SetMargin(space6, space4)
+	right.SetGap(space2)
+	right.SetColor(colorWindow)
 
 	snapshotHeader := fltk.NewFlex(0, 0, 929, 48)
 	snapshotHeader.SetType(fltk.ROW)
-	snapshotTitle := label("SNAPSHOTS", 14, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
-	snapshotHint := label("Select A and B, then compare", 12, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
+	snapshotTitle := label("Snapshot History", textHeading, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
+	snapshotTitle.SetLabelFont(fltk.HELVETICA_BOLD)
+	snapshotHint := label("Select A and B, then compare", textMeta, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
 	snapshotHint.SetLabelColor(colorSecondary)
-	u.compareButton = button("Compare A → B")
-	u.compareButton.SetColor(colorAccent)
+	u.snapshotButton = styledButton("Snapshot Now", buttonSecondary)
+	u.snapshotButton.Deactivate()
+	u.compareButton = styledButton("Compare A → B", buttonPrimary)
 	u.compareButton.Deactivate()
-	snapshotHeader.Fixed(snapshotTitle, 105)
+	snapshotHeader.Fixed(snapshotTitle, 170)
+	snapshotHeader.Fixed(u.snapshotButton, 126)
 	snapshotHeader.Fixed(u.compareButton, 145)
 	snapshotHeader.End()
 
@@ -227,9 +245,9 @@ func (u *App) build() {
 	snapshotActions := fltk.NewFlex(0, 0, 929, 34)
 	snapshotActions.SetType(fltk.ROW)
 	snapshotActions.SetGap(8)
-	u.editButton = button("Edit Description")
-	u.warningsButton = button("Warnings")
-	u.deleteButton = button("Delete Snapshot")
+	u.editButton = styledButton("Edit Description", buttonSecondary)
+	u.warningsButton = styledButton("Warnings", buttonSecondary)
+	u.deleteButton = styledButton("Delete Snapshot", buttonSecondary)
 	u.editButton.Deactivate()
 	u.warningsButton.Deactivate()
 	u.deleteButton.Deactivate()
@@ -238,7 +256,7 @@ func (u *App) build() {
 	snapshotActions.Fixed(u.deleteButton, 130)
 	snapshotActions.End()
 
-	u.summary = label("Pick two snapshots", 15, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
+	u.summary = label("Pick two snapshots", textBody, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
 	u.summary.SetLabelColor(colorSecondary)
 	metrics := fltk.NewFlex(0, 0, 929, 62)
 	metrics.SetType(fltk.ROW)
@@ -251,8 +269,8 @@ func (u *App) build() {
 	controls := fltk.NewFlex(0, 0, 929, 38)
 	controls.SetType(fltk.ROW)
 	controls.SetGap(6)
-	all, added := button("All"), button("Added")
-	removed, modified := button("Removed"), button("Modified")
+	all, added := styledButton("All", buttonSecondary), styledButton("Added", buttonSecondary)
+	removed, modified := styledButton("Removed", buttonSecondary), styledButton("Modified", buttonSecondary)
 	u.filterButtons = map[model.ChangeType]*fltk.Button{
 		"":                   all,
 		model.ChangeAdded:    added,
@@ -264,7 +282,7 @@ func (u *App) build() {
 	controls.Fixed(removed, 82)
 	controls.Fixed(modified, 82)
 	_ = fltk.NewBox(fltk.NO_BOX, 0, 0, 20, 34, "")
-	searchLabel := label("Search", 12, fltk.ALIGN_RIGHT|fltk.ALIGN_INSIDE)
+	searchLabel := label("Search", textMeta, fltk.ALIGN_RIGHT|fltk.ALIGN_INSIDE)
 	searchLabel.SetLabelColor(colorSecondary)
 	u.search = fltk.NewInput(0, 0, 220, 34, "")
 	u.search.SetTooltip("Search files by name or relative path")
@@ -276,10 +294,10 @@ func (u *App) build() {
 	resultNavigation := fltk.NewFlex(0, 0, 929, 30)
 	resultNavigation.SetType(fltk.ROW)
 	resultNavigation.SetGap(6)
-	u.resultsStatus = label("", 11, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
+	u.resultsStatus = label("", textSmall, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
 	u.resultsStatus.SetLabelColor(colorSecondary)
-	u.previousPage = button("Previous")
-	u.nextPage = button("Next")
+	u.previousPage = styledButton("Previous", buttonSecondary)
+	u.nextPage = styledButton("Next", buttonSecondary)
 	resultNavigation.Fixed(u.previousPage, 90)
 	resultNavigation.Fixed(u.nextPage, 72)
 	resultNavigation.End()
@@ -292,13 +310,16 @@ func (u *App) build() {
 	right.Fixed(controls, 38)
 	right.Fixed(resultNavigation, 30)
 	right.End()
-	content.End()
+	u.historyPage.End()
+	u.historyPage.Hide()
 	outer.End()
 	u.window.Resizable(outer)
 	u.window.End()
 
 	add.SetCallback(u.addFolder)
-	rootSettings.SetCallback(u.showRootSettings)
+	u.foldersTab.SetCallback(func() { u.showScreen(screenFolders) })
+	u.historyTab.SetCallback(func() { u.showScreen(screenHistory) })
+	u.settingsTab.SetCallback(u.showSettings)
 	u.snapshotButton.SetCallback(u.snapshotNow)
 	u.compareButton.SetCallback(u.compareSelected)
 	u.editButton.SetCallback(u.editSnapshotDescription)
@@ -325,7 +346,6 @@ func (u *App) build() {
 		u.diffPage++
 		u.renderDiff()
 	})
-	settings.SetCallback(u.showSettings)
 	u.window.SetCallback(func() {
 		if u.service.Config().CloseToTray {
 			u.Hide()
@@ -335,6 +355,25 @@ func (u *App) build() {
 	})
 	u.renderFilterState()
 	u.showIdleComparison("Select a folder and pick two snapshots.")
+}
+
+func (u *App) showScreen(screen screenID) {
+	u.activeScreen = screen
+	if screen == screenHistory {
+		u.foldersPage.Hide()
+		u.historyPage.Show()
+	} else {
+		u.historyPage.Hide()
+		u.foldersPage.Show()
+	}
+	u.foldersTab.Redraw()
+	u.historyTab.Redraw()
+	u.window.Redraw()
+}
+
+func (u *App) openRootHistory(rootID string) {
+	u.selectRoot(rootID)
+	u.showScreen(screenHistory)
 }
 
 func (u *App) bindEvents() {
@@ -379,32 +418,34 @@ func (u *App) refreshRoots() {
 	u.roots = u.service.Config().Roots
 	app.SortRoots(u.roots)
 	u.rootsCards.clear()
+	totalSnapshots := 0
 	for _, root := range u.roots {
-		state := ""
-		if root.Archived {
-			state = "Archived"
-		} else if root.LastScanError != "" {
-			state = "Unavailable"
-		}
 		records, _ := u.service.ListSnapshots(root.RootID)
-		meta := "No snapshots yet"
+		totalSnapshots += len(records)
+		lastSnapshot := "Never"
 		if len(records) > 0 {
-			meta = fmt.Sprintf("%d snapshot%s  ·  Latest %s", len(records), pluralSuffix(len(records)), records[0].CompletedAtUTC.Local().Format("02 Jan 15:04"))
-		}
-		if state != "" {
-			meta += "  ·  " + state
+			lastSnapshot = relativeTime(records[0].CompletedAtUTC.Local(), time.Now())
 		}
 		rootID := root.RootID
-		card := folderCardStyle{
-			Name: root.DisplayName, Path: root.Path, Meta: meta, Count: len(records),
-			Selected: root.RootID == u.selectedRootID, Unavailable: root.LastScanError != "",
+		card := folderRowStyle{
+			Name: root.DisplayName, Path: root.Path, SnapshotCount: len(records), LastSnapshot: lastSnapshot,
+			Schedule: scheduleDisplay(root.Schedule), Selected: root.RootID == u.selectedRootID,
+			Unavailable: root.LastScanError != "", Archived: root.Archived,
 		}
-		u.rootsCards.add(76, root.Path, func(button *fltk.Button) { drawFolderCard(button, card) }, func() {
-			fltk.Awake(func() { u.selectRoot(rootID) })
-		})
+		u.rootsCards.add(card,
+			func() { fltk.Awake(func() { u.openRootHistory(rootID) }) },
+			func() {
+				fltk.Awake(func() {
+					u.selectRoot(rootID)
+					u.showRootSettings()
+				})
+			},
+		)
 	}
+	u.rootsCards.finishBatch()
+	u.foldersSummary.SetLabel(fmt.Sprintf("%d folder%s  ·  %d snapshot%s total", len(u.roots), pluralSuffix(len(u.roots)), totalSnapshots, pluralSuffix(totalSnapshots)))
 	if len(u.roots) == 0 {
-		u.rootsCards.showEmpty("No folders yet\n\nUse Add Folder to begin.")
+		u.rootsCards.showEmpty()
 	}
 	if u.selectedRootID == "" && len(u.roots) > 0 {
 		u.selectRoot(u.roots[0].RootID)
@@ -1310,8 +1351,45 @@ func filepathBase(path string) string {
 	return path
 }
 
+func relativeTime(value, now time.Time) string {
+	delta := now.Sub(value)
+	if delta < time.Minute {
+		return "Just now"
+	}
+	if delta < time.Hour {
+		return fmt.Sprintf("%dm ago", int(delta.Minutes()))
+	}
+	if delta < 24*time.Hour {
+		return fmt.Sprintf("%dh ago", int(delta.Hours()))
+	}
+	days := int(delta.Hours() / 24)
+	if days < 14 {
+		return fmt.Sprintf("%dd ago", days)
+	}
+	return value.Format("02 Jan")
+}
+
+func scheduleDisplay(schedule model.Schedule) string {
+	switch schedule.Kind {
+	case model.ScheduleInterval:
+		if schedule.IntervalHours == 1 {
+			return "Every hour"
+		}
+		return fmt.Sprintf("Every %dh", schedule.IntervalHours)
+	case model.ScheduleDaily:
+		return "Daily"
+	case model.ScheduleWeekly:
+		return "Weekly"
+	case model.ScheduleMonthly:
+		return "Monthly"
+	default:
+		return "Manual"
+	}
+}
+
 func label(text string, size int, align fltk.Align) *fltk.Box {
 	box := fltk.NewBox(fltk.NO_BOX, 0, 0, 100, 30, text)
+	box.SetLabelFont(fltk.HELVETICA)
 	box.SetLabelSize(size)
 	box.SetLabelColor(colorText)
 	box.SetAlign(align)
@@ -1329,12 +1407,7 @@ func metricCard(text string, color fltk.Color) *fltk.Box {
 }
 
 func button(text string) *fltk.Button {
-	value := fltk.NewButton(0, 0, 100, 34, text)
-	value.ClearVisibleFocus()
-	styleWidget(value)
-	value.SetColor(colorRaised)
-	value.SetSelectionColor(colorAccent)
-	return value
+	return styledButton(text, buttonSecondary)
 }
 
 func clearButtonFocus(buttons ...*fltk.Button) {
@@ -1358,11 +1431,16 @@ func styleWidget(widget stylable) {
 func applyTheme() {
 	// FLTK list and input text use palette colors instead of widget labels.
 	// Set these globally so no control inherits black text on the dark theme.
-	fltk.SetBackgroundColor(23, 23, 23)
-	fltk.SetBackground2Color(41, 41, 41)
-	fltk.SetForegroundColor(241, 241, 241)
-	fltk.SetColor(fltk.SELECTION_COLOR, 52, 119, 94)
-	fltk.SetColor(fltk.INACTIVE_COLOR, 168, 168, 168)
+	fltk.SetFont(fltk.HELVETICA, "Segoe UI")
+	fltk.SetFont(fltk.HELVETICA_BOLD, "Segoe UI Bold")
+	fltk.SetFont(fltk.HELVETICA_ITALIC, "Segoe UI Italic")
+	fltk.SetFont(fltk.COURIER, "Consolas")
+	fltk.SetBackgroundColor(14, 17, 23)
+	fltk.SetBackground2Color(37, 45, 61)
+	fltk.SetForegroundColor(226, 232, 240)
+	fltk.SetColor(fltk.SELECTION_COLOR, 74, 144, 226)
+	fltk.SetColor(fltk.INACTIVE_COLOR, 61, 74, 92)
+	fltk.SetScrollbarSize(12)
 }
 
 func formatBytes(value int64) string {
