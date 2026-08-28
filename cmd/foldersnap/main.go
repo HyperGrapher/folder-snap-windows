@@ -10,8 +10,6 @@ import (
 	loggingpkg "foldersnap/internal/logging"
 	platform "foldersnap/internal/platform/windows"
 	"foldersnap/internal/ui"
-
-	"github.com/pwiecz/go-fltk"
 )
 
 func main() {
@@ -67,7 +65,7 @@ func main() {
 	go func() {
 		for event := range tray.Events() {
 			event := event
-			fltk.Awake(func() {
+			desktop.Dispatch(func() {
 				switch event {
 				case platform.TrayOpen:
 					desktop.Show()

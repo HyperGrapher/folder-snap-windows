@@ -30,41 +30,41 @@ func (Engine) Compare(before, after model.Snapshot) (model.DiffResult, error) {
 		return model.DiffResult{}, err
 	}
 
-	left := append([]model.SnapshotEntry(nil), before.Entries...)
-	right := append([]model.SnapshotEntry(nil), after.Entries...)
-	sort.Slice(left, func(i, j int) bool { return left[i].RelativePath < left[j].RelativePath })
-	sort.Slice(right, func(i, j int) bool { return right[i].RelativePath < right[j].RelativePath })
+	left := sortedEntries(before.Entries)
+	right := sortedEntries(after.Entries)
 	result := model.DiffResult{
 		BeforeID: before.Header.SnapshotID, AfterID: after.Header.SnapshotID,
 		BeforeWarnings: len(before.Header.ScanWarnings), AfterWarnings: len(after.Header.ScanWarnings),
 		IgnoreRulesChanged: strings.Join(before.Header.IgnoreConfig.Rules, "\n") != strings.Join(after.Header.IgnoreConfig.Rules, "\n"),
 	}
 	for i, j := 0, 0; i < len(left) || j < len(right); {
+		var entry model.DiffEntry
 		switch {
 		case i >= len(left):
-			entry := right[j]
-			result.Entries = append(result.Entries, onlyAfter(entry, before, beforeMatcher))
+			entry = onlyAfter(right[j], before, beforeMatcher)
 			j++
 		case j >= len(right):
-			entry := left[i]
-			result.Entries = append(result.Entries, onlyBefore(entry, after, afterMatcher))
+			entry = onlyBefore(left[i], after, afterMatcher)
 			i++
 		case left[i].RelativePath < right[j].RelativePath:
-			result.Entries = append(result.Entries, onlyBefore(left[i], after, afterMatcher))
+			entry = onlyBefore(left[i], after, afterMatcher)
 			i++
 		case left[i].RelativePath > right[j].RelativePath:
-			result.Entries = append(result.Entries, onlyAfter(right[j], before, beforeMatcher))
+			entry = onlyAfter(right[j], before, beforeMatcher)
 			j++
 		default:
 			b, a := left[i], right[j]
 			change, subtype := compareEntries(b, a)
-			result.Entries = append(result.Entries, model.DiffEntry{Path: a.RelativePath, DisplayPath: a.DisplayPath, Change: change, Subtype: subtype, Before: copyEntry(b), After: copyEntry(a)})
 			i++
 			j++
+			if change == model.ChangeUnchanged {
+				result.Summary.Unchanged++
+				continue
+			}
+			entry = model.DiffEntry{Path: a.RelativePath, DisplayPath: a.DisplayPath, Change: change, Subtype: subtype, Before: copyEntry(b), After: copyEntry(a)}
 		}
-	}
-	for _, entry := range result.Entries {
 		accumulate(&result.Summary, entry)
+		result.Entries = append(result.Entries, entry)
 	}
 	sort.SliceStable(result.Entries, func(i, j int) bool {
 		leftRank, rightRank := changeRank(result.Entries[i].Change), changeRank(result.Entries[j].Change)
@@ -75,6 +75,18 @@ func (Engine) Compare(before, after model.Snapshot) (model.DiffResult, error) {
 	})
 	result.Summary.NetBytes = after.Header.TotalFileBytes - before.Header.TotalFileBytes
 	return result, nil
+}
+
+// Scanner output is already path-sorted. Reusing it avoids duplicating two
+// complete snapshots during comparison; imported or test snapshots that are
+// not sorted still get a defensive shallow copy before sorting.
+func sortedEntries(entries []model.SnapshotEntry) []model.SnapshotEntry {
+	if sort.SliceIsSorted(entries, func(i, j int) bool { return entries[i].RelativePath < entries[j].RelativePath }) {
+		return entries
+	}
+	result := append([]model.SnapshotEntry(nil), entries...)
+	sort.Slice(result, func(i, j int) bool { return result[i].RelativePath < result[j].RelativePath })
+	return result
 }
 
 func onlyAfter(entry model.SnapshotEntry, before model.Snapshot, matcher *ignorepkg.Matcher) model.DiffEntry {

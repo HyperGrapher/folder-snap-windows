@@ -50,6 +50,13 @@ func (list *cardList) clear() {
 }
 
 func (list *cardList) add(height int, tooltip string, draw func(*fltk.Button), callback func()) {
+	list.addDeferred(height, tooltip, draw, callback)
+	list.layout()
+}
+
+// addDeferred is used when populating a page of cards. Calling layout only
+// once after the batch prevents quadratic main-thread work.
+func (list *cardList) addDeferred(height int, tooltip string, draw func(*fltk.Button), callback func()) {
 	list.scroll.Begin()
 	button := fltk.NewButton(0, 0, 100, height, "")
 	button.SetBox(fltk.NO_BOX)
@@ -61,8 +68,9 @@ func (list *cardList) add(height int, tooltip string, draw func(*fltk.Button), c
 	}
 	list.scroll.End()
 	list.entries = append(list.entries, cardListEntry{button: button, height: height})
-	list.layout()
 }
+
+func (list *cardList) finishBatch() { list.layout() }
 
 type changeCardStyle struct {
 	Path, Detail, Status string

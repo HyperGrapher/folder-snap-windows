@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -38,6 +39,28 @@ func TestCompareCoreCases(t *testing.T) {
 		if item.Path == "type" && item.Subtype != "type_changed" {
 			t.Fatal("missing type change subtype")
 		}
+	}
+}
+
+func TestLargeMostlyUnchangedComparisonMaterializesOnlyChanges(t *testing.T) {
+	const count = 50_000
+	beforeEntries := make([]model.SnapshotEntry, count)
+	afterEntries := make([]model.SnapshotEntry, count)
+	for index := range count {
+		path := fmt.Sprintf("folder/file-%06d.dat", index)
+		beforeEntries[index] = entry(path, model.EntryFile, 64, 10)
+		afterEntries[index] = entry(path, model.EntryFile, 64, 10)
+	}
+	afterEntries[count-1].Size++
+	result, err := (Engine{}).Compare(snapshot("before", 1, beforeEntries), snapshot("after", 2, afterEntries))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary.Unchanged != count-1 || result.Summary.Modified != 1 {
+		t.Fatalf("unexpected summary: %+v", result.Summary)
+	}
+	if len(result.Entries) != 1 || result.Entries[0].Path != afterEntries[count-1].RelativePath {
+		t.Fatalf("materialized %d entries, want only the changed entry", len(result.Entries))
 	}
 }
 

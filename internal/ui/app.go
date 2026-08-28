@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +20,8 @@ import (
 )
 
 const WindowTitle = "FolderSnap"
+
+const resultPageSize = 200
 
 const (
 	colorWindow       fltk.Color = 0x17171700
@@ -54,6 +58,9 @@ type App struct {
 	editButton      *fltk.Button
 	warningsButton  *fltk.Button
 	deleteButton    *fltk.Button
+	resultsStatus   *fltk.Box
+	previousPage    *fltk.Button
+	nextPage        *fltk.Button
 
 	roots              []model.WatchedRoot
 	timeline           []model.SnapshotRecord
@@ -65,9 +72,11 @@ type App struct {
 	compareState       comparisonState
 	diff               model.DiffResult
 	filter             model.ChangeType
+	diffPage           int
 	background         bool
 	quitting           bool
 	notify             func(string, string)
+	actions            chan func()
 }
 
 type comparisonState string
@@ -83,7 +92,7 @@ func New(service *app.Service, background bool) *App {
 	fltk.InitStyles()
 	fltk.SetScheme("gtk+")
 	applyTheme()
-	u := &App{service: service, background: background}
+	u := &App{service: service, background: background, actions: make(chan func(), 16)}
 	u.build()
 	u.bindEvents()
 	u.refreshRoots()
@@ -95,9 +104,39 @@ func (u *App) Run() int {
 		u.Show()
 	}
 	for !u.quitting {
-		fltk.Wait()
+		u.drainActions()
+		if u.quitting {
+			break
+		}
+		if u.window.IsShown() {
+			fltk.Wait()
+		} else {
+			// Fl::wait() returns immediately when no FLTK window is shown.
+			// A timed wait remains wakeable by tray callbacks without turning
+			// the hidden application loop into a one-core busy spin.
+			fltk.Wait(0.25)
+		}
+		u.drainActions()
 	}
 	return 0
+}
+
+// Dispatch queues work for the FLTK-owning thread. Unlike a bare Awake
+// callback, this remains reliable while every FLTK window is hidden.
+func (u *App) Dispatch(action func()) {
+	u.actions <- action
+	fltk.AwakeNullMessage()
+}
+
+func (u *App) drainActions() {
+	for {
+		select {
+		case action := <-u.actions:
+			action()
+		default:
+			return
+		}
+	}
 }
 
 func (u *App) Show()              { u.window.Show(); u.window.TakeFocus() }
@@ -227,6 +266,16 @@ func (u *App) build() {
 	controls.Fixed(searchLabel, 56)
 	controls.Fixed(u.search, 240)
 	controls.End()
+	resultNavigation := fltk.NewFlex(0, 0, 929, 30)
+	resultNavigation.SetType(fltk.ROW)
+	resultNavigation.SetGap(6)
+	u.resultsStatus = label("", 11, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
+	u.resultsStatus.SetLabelColor(colorSecondary)
+	u.previousPage = button("Previous")
+	u.nextPage = button("Next")
+	resultNavigation.Fixed(u.previousPage, 90)
+	resultNavigation.Fixed(u.nextPage, 72)
+	resultNavigation.End()
 	u.changesCards = newCardList(0, 0, 929, 310)
 	right.Fixed(snapshotHeader, 48)
 	right.Fixed(u.timelineCards.scroll, 176)
@@ -234,6 +283,7 @@ func (u *App) build() {
 	right.Fixed(u.summary, 40)
 	right.Fixed(metrics, 62)
 	right.Fixed(controls, 38)
+	right.Fixed(resultNavigation, 30)
 	right.End()
 	content.End()
 	outer.End()
@@ -254,8 +304,19 @@ func (u *App) build() {
 	u.search.SetCallbackCondition(fltk.WhenChanged)
 	u.search.SetCallback(func() {
 		if u.compareState == comparisonDone {
+			u.diffPage = 0
 			u.renderDiff()
 		}
+	})
+	u.previousPage.SetCallback(func() {
+		if u.diffPage > 0 {
+			u.diffPage--
+			u.renderDiff()
+		}
+	})
+	u.nextPage.SetCallback(func() {
+		u.diffPage++
+		u.renderDiff()
 	})
 	settings.SetCallback(u.showSettings)
 	u.window.SetCallback(func() {
@@ -529,6 +590,7 @@ func (u *App) compareSelected() {
 	u.compareVersion++
 	version := u.compareVersion
 	u.compareState = comparisonLoading
+	u.diffPage = 0
 	u.diff = model.DiffResult{}
 	u.summary.SetLabel("Loading snapshots and comparing files...")
 	u.setMetricPlaceholders()
@@ -541,6 +603,7 @@ func (u *App) compareSelected() {
 			after, loadErr := u.service.LoadSnapshot(rootID, afterID)
 			err = loadErr
 			if err == nil {
+				largeComparison := len(before.Entries)+len(after.Entries) >= 100_000
 				result, compareErr := u.service.Compare(before, after)
 				err = compareErr
 				if err == nil {
@@ -552,6 +615,14 @@ func (u *App) compareSelected() {
 							u.updateCompareButton()
 						}
 					})
+					if largeComparison {
+						// The result owns compact copies of changed entries, so the
+						// decoded full snapshots can be returned to Windows now.
+						before = model.Snapshot{}
+						after = model.Snapshot{}
+						runtime.GC()
+						debug.FreeOSMemory()
+					}
 					return
 				}
 			}
@@ -589,36 +660,82 @@ func (u *App) renderDiff() {
 	u.renderFilterState()
 	query := strings.ToLower(strings.TrimSpace(u.search.Value()))
 	u.changesCards.clear()
-	visible := 0
-	for _, item := range u.diff.Entries {
+	matches := func(item model.DiffEntry) bool {
 		if item.Uncertain || item.ScopeDifference || item.Change == model.ChangeUnchanged {
-			continue
+			return false
 		}
 		if u.filter != "" && item.Change != u.filter {
+			return false
+		}
+		return query == "" || strings.Contains(strings.ToLower(item.DisplayPath), query)
+	}
+	visible := 0
+	for _, item := range u.diff.Entries {
+		if matches(item) {
+			visible++
+		}
+	}
+	pageCount := (visible + resultPageSize - 1) / resultPageSize
+	if pageCount == 0 {
+		u.diffPage = 0
+	} else if u.diffPage >= pageCount {
+		u.diffPage = pageCount - 1
+	}
+	start := u.diffPage * resultPageSize
+	end := minInt(start+resultPageSize, visible)
+	matchedIndex := 0
+	for _, item := range u.diff.Entries {
+		if !matches(item) {
 			continue
 		}
-		if query != "" && !strings.Contains(strings.ToLower(item.DisplayPath), query) {
+		if matchedIndex < start {
+			matchedIndex++
 			continue
+		}
+		if matchedIndex >= end {
+			break
 		}
 		marker := map[model.ChangeType]string{model.ChangeAdded: "ADDED", model.ChangeRemoved: "REMOVED", model.ChangeModified: "MODIFIED"}[item.Change]
 		entry := item.After
 		if entry == nil {
 			entry = item.Before
 		}
-		u.changesCards.add(56, item.DisplayPath, func(button *fltk.Button) {
+		u.changesCards.addDeferred(56, item.DisplayPath, func(button *fltk.Button) {
 			drawChangeCard(button, changeCardStyle{
 				Path: item.DisplayPath, Detail: diffEntryDetail(item), Status: marker,
 				Change: string(item.Change), Directory: entry != nil && entry.Type == model.EntryDirectory,
 			})
 		}, nil)
-		visible++
+		matchedIndex++
 	}
+	u.changesCards.finishBatch()
+	u.renderResultNavigation(visible, start, end)
 	if visible == 0 {
 		message := "No changed items in this comparison."
 		if query != "" || u.filter != "" {
 			message = "No changes match the current filter."
 		}
 		u.changesCards.showEmpty(message)
+	}
+}
+
+func (u *App) renderResultNavigation(total, start, end int) {
+	if total == 0 {
+		u.resultsStatus.SetLabel("0 changes")
+		u.previousPage.Deactivate()
+		u.nextPage.Deactivate()
+		return
+	}
+	u.resultsStatus.SetLabel(fmt.Sprintf("Showing %d–%d of %d changes", start+1, end, total))
+	if start > 0 {
+		u.previousPage.Activate()
+	} else {
+		u.previousPage.Deactivate()
+	}
+	if end < total {
+		u.nextPage.Activate()
+	} else {
+		u.nextPage.Deactivate()
 	}
 }
 
@@ -642,10 +759,12 @@ func (u *App) showIdleComparison(message string) {
 	u.compareVersion++
 	u.compareState = comparisonIdle
 	u.diff = model.DiffResult{}
+	u.diffPage = 0
 	u.summary.SetLabel(message)
 	u.setMetricPlaceholders()
 	u.changesCards.clear()
 	u.changesCards.showEmpty(message)
+	u.renderResultNavigation(0, 0, 0)
 	u.renderFilterState()
 	u.updateCompareButton()
 }
@@ -654,10 +773,12 @@ func (u *App) showComparisonError(message string) {
 	u.compareVersion++
 	u.compareState = comparisonError
 	u.diff = model.DiffResult{}
+	u.diffPage = 0
 	u.summary.SetLabel(message)
 	u.setMetricPlaceholders()
 	u.changesCards.clear()
 	u.changesCards.showEmpty(message)
+	u.renderResultNavigation(0, 0, 0)
 	u.renderFilterState()
 }
 
@@ -678,6 +799,7 @@ func (u *App) updateCompareButton() {
 
 func (u *App) setFilter(filter model.ChangeType) {
 	u.filter = filter
+	u.diffPage = 0
 	if u.compareState == comparisonDone {
 		u.renderDiff()
 	} else {
@@ -1313,4 +1435,11 @@ func pluralSuffix64(value int64) string {
 		return ""
 	}
 	return "s"
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
