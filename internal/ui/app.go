@@ -139,7 +139,11 @@ func (u *App) drainActions() {
 	}
 }
 
-func (u *App) Show()              { u.window.Show(); u.window.TakeFocus() }
+func (u *App) Show() {
+	u.window.Show()
+	platform.ApplyDarkTitleBar(u.window.RawHandle())
+	u.window.TakeFocus()
+}
 func (u *App) Hide()              { u.window.Hide() }
 func (u *App) RawHandle() uintptr { return u.window.RawHandle() }
 func (u *App) Quit() {
@@ -156,6 +160,10 @@ func (u *App) build() {
 	u.window = fltk.NewWindow(1200, 760, WindowTitle)
 	u.window.SetColor(colorWindow)
 	u.window.SetSizeRange(980, 640, 0, 0, 0, 0, false)
+	platform.ApplyDarkTitleBar(u.window.RawHandle())
+	if icon, err := newFolderSnapIcon(); err == nil {
+		u.window.SetIcons([]*fltk.RgbImage{icon})
+	}
 
 	outer := fltk.NewFlex(0, 0, 1200, 760)
 	outer.SetType(fltk.COLUMN)
@@ -165,13 +173,20 @@ func (u *App) build() {
 	top.SetType(fltk.ROW)
 	top.SetMargin(12, 9)
 	top.SetColor(colorPanel)
+	toolbarIcon := fltk.NewBox(fltk.NO_BOX, 0, 0, 34, 40, "")
+	if icon, err := newFolderSnapIcon(); err == nil {
+		icon.Scale(30, 30, true, true)
+		toolbarIcon.SetImage(icon)
+	}
+	toolbarIcon.SetAlign(fltk.ALIGN_CENTER | fltk.ALIGN_INSIDE)
 	title := label("FolderSnap", 20, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
 	u.status = label("Ready", 12, fltk.ALIGN_RIGHT|fltk.ALIGN_INSIDE)
 	add := button("Add Folder")
 	u.snapshotButton = button("Snapshot Now")
 	u.snapshotButton.Deactivate()
 	settings := button("Settings")
-	top.Fixed(title, 180)
+	top.Fixed(toolbarIcon, 38)
+	top.Fixed(title, 142)
 	top.Fixed(u.status, 360)
 	top.Fixed(add, 110)
 	top.Fixed(u.snapshotButton, 130)

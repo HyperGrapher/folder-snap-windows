@@ -49,6 +49,7 @@ The scanner continues to persist flat, sorted relative-path entries because that
 - The release executable was rebuilt and inspected; its imports are limited to Windows system DLLs.
 - A 188,610-file / 21.7 GB saved-history comparison was exercised: after completion the release process settled at about 31 MB working set and 0% CPU while hidden; the same process reopened successfully through the tray path.
 - Large diff results are paginated at 200 cards per page, and hidden-window tray actions use a main-thread dispatch queue so Open, Settings, Snapshot, and Quit do not depend on FLTK dispatching an Awake callback with no visible window.
+- A generated transparent FolderSnap mark is embedded in the title bar, toolbar, executable resource, and tray icon; the release binary contains a `.rsrc` section and does not require external icon files.
 
 ## Deferred until the core is stable
 

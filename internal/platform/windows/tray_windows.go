@@ -19,6 +19,7 @@ const (
 
 const (
 	wmTray         = 0x8000 + 41
+	iconResourceID = 1
 	wmDestroy      = 0x0002
 	wmClose        = 0x0010
 	wmLButtonUp    = 0x0202
@@ -85,6 +86,7 @@ var (
 	translateMessageProc = user32.NewProc("TranslateMessage")
 	dispatchMessageProc  = user32.NewProc("DispatchMessageW")
 	loadIconProc         = user32.NewProc("LoadIconW")
+	getModuleHandleProc  = kernel32.NewProc("GetModuleHandleW")
 	createPopupMenuProc  = user32.NewProc("CreatePopupMenu")
 	appendMenuProc       = user32.NewProc("AppendMenuW")
 	trackPopupMenuProc   = user32.NewProc("TrackPopupMenu")
@@ -178,7 +180,8 @@ func (t *Tray) loop() {
 }
 
 func (t *Tray) iconData(flags uint32) notifyIconData {
-	icon, _, _ := loadIconProc.Call(0, 32512)
+	instance, _, _ := getModuleHandleProc.Call(0)
+	icon, _, _ := loadIconProc.Call(instance, iconResourceID)
 	return notifyIconData{Size: uint32(unsafe.Sizeof(notifyIconData{})), Hwnd: t.hwnd, ID: 1, Flags: flags, CallbackMessage: wmTray, Icon: icon}
 }
 

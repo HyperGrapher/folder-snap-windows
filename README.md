@@ -22,6 +22,8 @@ go vet ./...
 
 The executable is written to `bin\FolderSnap.exe`. Use `FolderSnap.exe --background` for Windows-startup/tray-only launch.
 
+The FolderSnap mark is embedded in the executable and used consistently in the title bar, toolbar, and system tray. Release builds compile `assets\foldersnap.rc` with MinGW `windres`; no icon file is required beside the executable.
+
 ## Local data
 
 FolderSnap stores configuration under `%LOCALAPPDATA%\FolderSnap\config.json`. Snapshot records use a single `%LOCALAPPDATA%\FolderSnap\History\index.json`; immutable gzip-compressed payloads are stored beside it as `<snapshot-id>.snapshot`.
