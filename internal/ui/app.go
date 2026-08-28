@@ -881,6 +881,7 @@ func (u *App) reviewCleanup() {
 	message.SetAlign(fltk.ALIGN_LEFT | fltk.ALIGN_INSIDE)
 	cancel := fltk.NewButton(492, 504, 110, 38, "Cancel")
 	preflight := fltk.NewButton(612, 504, 132, 38, "Run Preflight")
+	clearButtonFocus(cancel, preflight)
 	accepted := false
 	cancel.SetCallback(func() { win.Hide() })
 	preflight.SetCallback(func() { accepted = true; win.Hide() })
@@ -1035,6 +1036,7 @@ func (u *App) showRootSettings() {
 	pathOutput := fltk.NewOutput(180, 56, 390, 28)
 	pathOutput.SetValue(root.Path)
 	openExplorer := fltk.NewButton(580, 56, 110, 28, "Open Explorer")
+	clearButtonFocus(openExplorer)
 
 	modalLabel(20, 104, 150, 28, "Schedule")
 	schedule := fltk.NewChoice(180, 104, 220, 28)
@@ -1088,6 +1090,7 @@ func (u *App) showRootSettings() {
 	deleteHistory := fltk.NewButton(300, 548, 150, 32, "Delete History...")
 	cancel := fltk.NewButton(468, 638, 100, 34, "Cancel")
 	save := fltk.NewButton(578, 638, 112, 34, "Save")
+	clearButtonFocus(testButton, archive, deleteHistory, cancel, save)
 
 	accepted := false
 	archiveValue := root.Archived
@@ -1196,6 +1199,7 @@ func (u *App) showSettings() {
 	quit := fltk.NewButton(174, 494, 140, 34, "Quit FolderSnap")
 	cancel := fltk.NewButton(360, 558, 100, 34, "Cancel")
 	save := fltk.NewButton(470, 558, 106, 34, "Save")
+	clearButtonFocus(openData, quit, cancel, save)
 	accepted := false
 	openData.SetCallback(func() { _ = platform.OpenInExplorer(u.service.DataDir()) })
 	quit.SetCallback(func() { win.Hide(); u.Quit() })
@@ -1239,6 +1243,7 @@ func promptText(title, prompt, initial string, maxRunes int) (string, bool) {
 	input.SetValue(initial)
 	cancel := fltk.NewButton(326, 122, 100, 34, "Cancel")
 	save := fltk.NewButton(436, 122, 106, 34, "Save")
+	clearButtonFocus(cancel, save)
 	accepted := false
 	cancel.SetCallback(func() { win.Hide() })
 	save.SetCallback(func() {
@@ -1366,10 +1371,17 @@ func metricCard(text string, color fltk.Color) *fltk.Box {
 
 func button(text string) *fltk.Button {
 	value := fltk.NewButton(0, 0, 100, 34, text)
+	value.ClearVisibleFocus()
 	styleWidget(value)
 	value.SetColor(colorRaised)
 	value.SetSelectionColor(colorAccent)
 	return value
+}
+
+func clearButtonFocus(buttons ...*fltk.Button) {
+	for _, value := range buttons {
+		value.ClearVisibleFocus()
+	}
 }
 
 type stylable interface {
