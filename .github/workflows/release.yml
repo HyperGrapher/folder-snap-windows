@@ -50,7 +50,9 @@ jobs:
       - name: Rebuild FLTK for the runner toolchain
         shell: msys2 {0}
         run: |
+          go mod download github.com/pwiecz/go-fltk
           fltk_dir="$(go list -m -f '{{.Dir}}' github.com/pwiecz/go-fltk)"
+          test -n "$fltk_dir"
           fltk_dir="$(cygpath -u "$fltk_dir")"
           chmod -R u+w "$fltk_dir"
           cd "$fltk_dir"
