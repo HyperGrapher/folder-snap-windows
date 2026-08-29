@@ -129,9 +129,10 @@ func cleanupPathKey(value string) string {
 }
 
 type cleanupPanelList struct {
-	table     *fltk.TableRow
-	selection *cleanupSelection
-	onChange  func()
+	table          *fltk.TableRow
+	selection      *cleanupSelection
+	visibleIndices []int
+	onChange       func()
 }
 
 func newCleanupPanelList(x, y, width, height int, onChange func()) *cleanupPanelList {
@@ -159,10 +160,10 @@ func newCleanupPanelList(x, y, width, height int, onChange func()) *cleanupPanel
 			return false
 		}
 		row, column := list.table.RowAndColumnFromCursor()
-		if row < 0 || column != 0 {
+		if row < 0 || row >= len(list.visibleIndices) || column != 0 {
 			return false
 		}
-		list.selection.toggle(row)
+		list.selection.toggle(list.visibleIndices[row])
 		list.table.Redraw()
 		if list.onChange != nil {
 			list.onChange()
@@ -175,11 +176,29 @@ func newCleanupPanelList(x, y, width, height int, onChange func()) *cleanupPanel
 
 func (l *cleanupPanelList) setCandidates(candidates []cleanup.Candidate) {
 	l.selection = newCleanupSelection(candidates)
-	l.table.SetRowCount(len(candidates))
+	l.visibleIndices = make([]int, len(candidates))
+	for index := range candidates {
+		l.visibleIndices[index] = index
+	}
+	l.table.SetRowCount(len(l.visibleIndices))
 	// FLTK only applies row_height_all to rows that already exist. Applying it
 	// before SetRowCount leaves newly populated rows at the cramped theme
 	// default and vertically clips their icons and metadata.
 	l.table.SetRowHeightAll(54)
+	l.table.SetTopRow(0)
+	l.table.Redraw()
+}
+
+func (l *cleanupPanelList) setFilter(query string) {
+	query = strings.ToLower(strings.TrimSpace(query))
+	previous := l.selection
+	l.visibleIndices = l.visibleIndices[:0]
+	for index, candidate := range previous.candidates {
+		if query == "" || cleanupCandidateMatches(candidate, query) {
+			l.visibleIndices = append(l.visibleIndices, index)
+		}
+	}
+	l.table.SetRowCount(len(l.visibleIndices))
 	l.table.SetTopRow(0)
 	l.table.Redraw()
 }
@@ -193,10 +212,18 @@ func (l *cleanupPanelList) setAll(checked bool) {
 }
 
 func (l *cleanupPanelList) drawCell(context fltk.TableContext, row, _ int, x, y, width, height int) {
-	if context != fltk.ContextCell || row < 0 || row >= len(l.selection.candidates) {
+	if context == fltk.ContextTable && len(l.visibleIndices) == 0 {
+		fltk.DrawRectfWithColor(x, y, width, height, colorPanel)
+		fltk.SetDrawColor(colorSecondary)
+		fltk.SetDrawFont(fltk.HELVETICA, textBody)
+		fltk.Draw("No Added items match this filter.", x, y, width, height, fltk.ALIGN_CENTER|fltk.ALIGN_INSIDE)
 		return
 	}
-	candidate := l.selection.candidates[row]
+	if context != fltk.ContextCell || row < 0 || row >= len(l.visibleIndices) {
+		return
+	}
+	index := l.visibleIndices[row]
+	candidate := l.selection.candidates[index]
 	background := colorPanel
 	if row%2 == 1 {
 		background = colorWindow
@@ -210,7 +237,7 @@ func (l *cleanupPanelList) drawCell(context fltk.TableContext, row, _ int, x, y,
 	}
 	checkX := x + space4 + depth*space4
 	checkY := y + (height-16)/2
-	drawCleanupCheckbox(checkX, checkY, l.selection.state(row))
+	drawCleanupCheckbox(checkX, checkY, l.selection.state(index))
 
 	iconX := checkX + 28
 	iconY := y + (height-19)/2
@@ -241,6 +268,15 @@ func (l *cleanupPanelList) drawCell(context fltk.TableContext, row, _ int, x, y,
 	fltk.SetDrawFont(fltk.HELVETICA, textSmall)
 	fltk.Draw(meta, textX, textTop+22, width-(textX-x)-space4, 18, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
 	fltk.PopClip()
+}
+
+func cleanupCandidateMatches(candidate cleanup.Candidate, query string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	name := candidate.Entry.DisplayPath
+	if name == "" {
+		name = candidate.Path
+	}
+	return strings.Contains(strings.ToLower(name), query) || strings.Contains(strings.ToLower(candidate.Path), query)
 }
 
 func drawCleanupCheckbox(x, y int, state cleanupCheckState) {

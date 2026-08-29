@@ -56,3 +56,15 @@ func TestCleanupSelectionHierarchyIsCaseInsensitive(t *testing.T) {
 		t.Fatal("mixed-case directory did not select its descendants")
 	}
 }
+
+func TestCleanupCandidateMatchesNameAndPath(t *testing.T) {
+	candidate := cleanup.Candidate{Path: "NewFolder/report.txt", Entry: model.SnapshotEntry{DisplayPath: "NewFolder/report.txt"}}
+	for _, query := range []string{"report", "newfolder/", "TXT"} {
+		if !cleanupCandidateMatches(candidate, query) {
+			t.Fatalf("query %q did not match candidate", query)
+		}
+	}
+	if cleanupCandidateMatches(candidate, "missing") {
+		t.Fatal("non-matching query returned true")
+	}
+}

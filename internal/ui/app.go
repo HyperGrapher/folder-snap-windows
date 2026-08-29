@@ -61,6 +61,7 @@ type App struct {
 	cleanupTitle       *fltk.Box
 	cleanupDescription *fltk.Box
 	cleanupSelection   *fltk.Box
+	cleanupSearch      *fltk.Input
 	cleanupReminder    *fltk.Box
 	cleanupSelectAll   *fltk.Button
 	cleanupDeselectAll *fltk.Button
@@ -441,8 +442,21 @@ func (u *App) buildCleanupPage() {
 	u.cleanupDeselectAll = styledButton("Deselect All", buttonGhost)
 	u.cleanupSelection = label("0 items selected", textMeta, fltk.ALIGN_RIGHT|fltk.ALIGN_INSIDE)
 	u.cleanupSelection.SetLabelColor(colorSecondary)
+	u.cleanupSearch = fltk.NewInput(0, 0, 220, 34, "")
+	u.cleanupSearch.SetTooltip("Filter cleanup items by name or relative path")
+	styleWidget(u.cleanupSearch)
+	u.cleanupSearch.SetColor(colorInput)
+	u.cleanupSearch.SetDrawHandler(func(baseDraw func()) {
+		baseDraw()
+		if u.cleanupSearch.Value() == "" && !u.cleanupSearch.HasFocus() {
+			fltk.SetDrawColor(colorDisabled)
+			fltk.SetDrawFont(fltk.HELVETICA, textMeta)
+			fltk.Draw("Filter items…", u.cleanupSearch.X()+space3, u.cleanupSearch.Y(), u.cleanupSearch.W()-space6, u.cleanupSearch.H(), fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+		}
+	})
 	toolbar.Fixed(u.cleanupSelectAll, 92)
 	toolbar.Fixed(u.cleanupDeselectAll, 104)
+	toolbar.Fixed(u.cleanupSearch, 220)
 	toolbar.End()
 
 	u.cleanupList = newCleanupPanelList(0, 0, 1132, 410, u.updateCleanupSelection)
@@ -486,6 +500,12 @@ func (u *App) buildCleanupPage() {
 	u.cleanupDeselectAll.SetCallback(func() {
 		if !u.cleanupBusy {
 			u.cleanupList.setAll(false)
+		}
+	})
+	u.cleanupSearch.SetCallbackCondition(fltk.WhenChanged)
+	u.cleanupSearch.SetCallback(func() {
+		if !u.cleanupBusy {
+			u.cleanupList.setFilter(u.cleanupSearch.Value())
 		}
 	})
 	u.cleanupCancel.SetCallback(func() {
@@ -1055,6 +1075,7 @@ func (u *App) openCleanupPanel() {
 	u.cleanupTitle.SetLabel("Delete newly created items")
 	u.cleanupDescription.SetLabel(fmt.Sprintf("%s  ·  %d Added items are eligible for review. Selected items will be moved to the Windows Recycle Bin.", u.comparisonTitle(), len(candidates)))
 	u.cleanupReminder.SetLabel(fmt.Sprintf("Only Added items can be selected here. %d modified and %d removed items are excluded and will not be touched.", u.diff.Summary.Modified, u.diff.Summary.Removed))
+	u.cleanupSearch.SetValue("")
 	u.cleanupList.setCandidates(candidates)
 	u.setCleanupBusy(false)
 	u.updateCleanupSelection()
