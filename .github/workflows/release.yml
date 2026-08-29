@@ -1,0 +1,84 @@
+name: Windows release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish Windows executable
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: '1'
+      GOOS: windows
+      GOARCH: amd64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # go-fltk links against the MinGW libraries bundled with the pinned
+      # dependency. MSYS2 supplies gcc, g++, and windres on the hosted runner.
+      - name: Install MinGW toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+
+      - name: Verify tag and toolchain
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Release tags must use semantic version form v1.2.3 (got '$env:GITHUB_REF_NAME')."
+          }
+          $env:Path = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:Path"
+          go version
+          gcc --version | Select-Object -First 1
+          g++ --version | Select-Object -First 1
+          windres --version | Select-Object -First 1
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          $env:Path = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:Path"
+          go test -count=1 ./...
+          go vet ./...
+
+      - name: Build release executable
+        shell: pwsh
+        run: |
+          $env:Path = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:Path"
+          .\scripts\build.ps1 -Configuration Release
+          if (-not (Test-Path .\bin\FolderSnap.exe)) {
+            throw 'The release executable was not produced.'
+          }
+          Get-FileHash .\bin\FolderSnap.exe -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash)  FolderSnap.exe" } |
+            Set-Content .\bin\FolderSnap.sha256 -Encoding ascii
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: FolderSnap ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            bin/FolderSnap.exe
+            bin/FolderSnap.sha256
