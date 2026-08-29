@@ -215,12 +215,25 @@ The window follows the macOS History layout adapted to FLTK:
 
 These features are secondary to correct history behavior.
 
-## 12. Deferred features
+## 12. Added-item cleanup
+
+After an explicit A/B comparison, the user may open a dedicated deletion panel for entries classified as Added. The panel must:
+
+- show only Added entries that are neither uncertain nor caused by an exclusion-scope difference;
+- start with no items selected;
+- support Select All, Deselect All, and hierarchical directory selection with checked/indeterminate states;
+- clearly exclude Removed and Modified entries from the operation;
+- move selected current-filesystem items to the Windows Recycle Bin, never permanently delete them;
+- validate containment, type, metadata, reparse ancestors, and directory contents before confirmation and again immediately before mutation;
+- block changed, missing, unsafe, or untracked content without affecting it;
+- never fall back to permanent deletion when the Recycle Bin is unavailable;
+- preserve historical snapshots and write a per-root JSONL cleanup audit.
+
+## 13. Deferred features
 
 The following are not part of the stabilization release:
 
 - HTML, CSV, or text export
-- cleanup/deletion of current filesystem items based on a diff
 - file-content backup or restoration
 - content hashing
 - rename detection
@@ -228,9 +241,7 @@ The following are not part of the stabilization release:
 - cloud sync, telemetry, or accounts
 - NTFS journal integration
 
-Existing experimental cleanup code must not appear in the primary UI until the base snapshot workflow is stable.
-
-## 13. Acceptance criteria
+## 14. Acceptance criteria
 
 The release is accepted when all of the following pass:
 
@@ -244,8 +255,11 @@ The release is accepted when all of the following pass:
 8. Restarting the app loads the history index but starts with no A/B selection.
 9. Missing payload and corrupt-index errors are visible and do not fabricate changes.
 10. All unit/integration tests and `go vet ./...` pass, and the release executable has no non-system runtime DLL dependency.
+11. The deletion panel is unavailable until a completed comparison contains eligible Added entries.
+12. The deletion panel starts empty, directory selection propagates to descendants, and partial selection never leaves an ancestor directory eligible for deletion.
+13. Confirmed items are revalidated and moved only through the Windows Recycle Bin; changed or unsafe items remain untouched.
 
-## 14. Implementation guardrails
+## 15. Implementation guardrails
 
 - Core scanner, store, and diff logic remain independent of FLTK.
 - Do not reintroduce automatic latest-two comparison.
@@ -255,4 +269,5 @@ The release is accepted when all of the following pass:
 - Do not traverse reparse-point directories.
 - Do not mutate historical snapshot payloads.
 - Do not let stale asynchronous comparison results overwrite a newer selection.
-- Do not expose experimental cleanup controls in the main comparison workflow.
+- Do not allow cleanup of Removed, Modified, uncertain, or exclusion-scope entries.
+- Do not permanently delete current filesystem content or mutate historical snapshots.

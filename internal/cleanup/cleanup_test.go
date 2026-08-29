@@ -118,6 +118,30 @@ func TestDirectoryIsBlockedWhenSelectedChildChanged(t *testing.T) {
 	}
 }
 
+func TestDirectoryPreflightUsesCaseInsensitiveSelectedPaths(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "NewFolder")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	childPath := filepath.Join(dir, "Report.TXT")
+	if err := os.WriteFile(childPath, []byte("current"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(childPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates := []Candidate{
+		{Path: "newfolder", Entry: model.SnapshotEntry{RelativePath: "newfolder", Type: model.EntryDirectory}},
+		{Path: "newfolder/report.txt", Entry: model.SnapshotEntry{RelativePath: "newfolder/report.txt", Type: model.EntryFile, Size: info.Size(), ModifiedUnixNs: info.ModTime().UnixNano()}},
+	}
+	result := (Service{RootPath: root}).Preflight(context.Background(), candidates)
+	if len(result) != 2 || result[0].Status != StatusReady || result[1].Status != StatusReady {
+		t.Fatalf("mixed-case selected tree was rejected: %+v", result)
+	}
+}
+
 func TestExecuteNeverFallsBack(t *testing.T) {
 	recycler := &fakeRecycler{fail: true}
 	root := t.TempDir()

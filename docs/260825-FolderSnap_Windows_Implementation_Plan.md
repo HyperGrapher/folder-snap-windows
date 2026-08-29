@@ -52,8 +52,14 @@ The scanner continues to persist flat, sorted relative-path entries because that
 - A generated transparent FolderSnap mark is embedded in the title bar, toolbar, executable resource, and tray icon; the release binary contains a `.rsrc` section and does not require external icon files.
 - Automated coverage and the data-safety audit are recorded in `260828-FolderSnap_Windows_Data_Safety_Review.md`; concurrency, recovery, containment, cleanup revalidation, self-exclusion, and UI state regressions are covered.
 
-## Deferred until the core is stable
+## Added-item cleanup phase — implemented 29 August 2026
+
+- Added a dedicated mockup-aligned deletion page opened from a completed comparison.
+- Added virtualized rows, empty-by-default selection, hierarchical folder propagation, indeterminate states, selected item/byte totals, and explicit Modified/Removed exclusion messaging.
+- Connected preflight, confirmation, immediate revalidation, Windows Recycle Bin execution, result reporting, and per-root JSONL audit recording.
+- Fixed case-insensitive path matching for Windows directory-content validation and added selection/data-safety regressions.
+
+## Deferred
 
 - HTML/CSV/text export
-- Added-item cleanup UI and current-filesystem deletion
 - hashing, content backup, restore, and rename detection

@@ -33,6 +33,7 @@ type App struct {
 	changesCards       *cardList
 	foldersPage        *fltk.Group
 	historyPage        *fltk.Group
+	cleanupPage        *fltk.Group
 	foldersTab         *fltk.Button
 	historyTab         *fltk.Button
 	settingsTab        *fltk.Button
@@ -55,6 +56,16 @@ type App struct {
 	resultsStatus      *fltk.Box
 	previousPage       *fltk.Button
 	nextPage           *fltk.Button
+	cleanupButton      *fltk.Button
+	cleanupList        *cleanupPanelList
+	cleanupTitle       *fltk.Box
+	cleanupDescription *fltk.Box
+	cleanupSelection   *fltk.Box
+	cleanupReminder    *fltk.Box
+	cleanupSelectAll   *fltk.Button
+	cleanupDeselectAll *fltk.Button
+	cleanupCancel      *fltk.Button
+	cleanupDelete      *fltk.Button
 
 	roots              []model.WatchedRoot
 	timeline           []model.SnapshotRecord
@@ -73,6 +84,10 @@ type App struct {
 	actions            *actionQueue
 	activeScreen       screenID
 	timelineCardStates map[string]timelineCardState
+	cleanupRootID      string
+	cleanupBeforeID    string
+	cleanupAfterID     string
+	cleanupBusy        bool
 }
 
 type timelineCardState struct {
@@ -85,6 +100,7 @@ type screenID string
 const (
 	screenFolders screenID = "folders"
 	screenHistory screenID = "history"
+	screenCleanup screenID = "cleanup"
 )
 
 type comparisonState string
@@ -178,7 +194,7 @@ func (u *App) build() {
 	leftPadding := fltk.NewBox(fltk.NO_BOX, 0, 0, space4, 46, "")
 	u.activeScreen = screenFolders
 	u.foldersTab = styledTab("Folders", func() bool { return u.activeScreen == screenFolders })
-	u.historyTab = styledTab("History & Compare", func() bool { return u.activeScreen == screenHistory })
+	u.historyTab = styledTab("History & Compare", func() bool { return u.activeScreen == screenHistory || u.activeScreen == screenCleanup })
 	u.settingsTab = styledTab("Settings", func() bool { return false })
 	u.status = label("Ready", textSmall, fltk.ALIGN_RIGHT|fltk.ALIGN_INSIDE)
 	u.status.SetLabelColor(colorSecondary)
@@ -272,13 +288,18 @@ func (u *App) build() {
 	right.SetGap(space3)
 	right.SetColor(colorWindow)
 
-	snapshotHeader := fltk.NewFlex(0, 0, 825, 52)
+	snapshotHeader := fltk.NewFlex(0, 0, 825, 38)
 	snapshotHeader.SetType(fltk.ROW)
+	snapshotHeader.SetGap(space2)
 	u.summary = label("Pick two snapshots", textHeading, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
 	u.summary.SetLabelFont(fltk.HELVETICA_BOLD)
 	u.summary.SetLabelColor(colorText)
+	u.cleanupButton = styledButton("Delete New Items", buttonDestructive)
+	u.cleanupButton.SetTooltip("Review Added files and folders before moving them to the Recycle Bin")
+	u.cleanupButton.Deactivate()
 	u.snapshotButton = styledButton("Snapshot Now", buttonSecondary)
 	u.snapshotButton.Deactivate()
+	snapshotHeader.Fixed(u.cleanupButton, 142)
 	snapshotHeader.Fixed(u.snapshotButton, 126)
 	snapshotHeader.End()
 	metrics := fltk.NewFlex(0, 0, 825, 94)
@@ -333,7 +354,7 @@ func (u *App) build() {
 	resultNavigation.Fixed(u.nextPage, 72)
 	resultNavigation.End()
 	u.changesCards = newCardList(0, 0, 825, 340)
-	right.Fixed(snapshotHeader, 52)
+	right.Fixed(snapshotHeader, 38)
 	right.Fixed(metrics, 94)
 	right.Fixed(u.sizeDeltaSummary, 24)
 	right.Fixed(controls, 38)
@@ -342,6 +363,7 @@ func (u *App) build() {
 	historyLayout.End()
 	u.historyPage.End()
 	u.historyPage.Hide()
+	u.buildCleanupPage()
 	pageHost.End()
 	outer.End()
 	u.window.Resizable(outer)
@@ -353,6 +375,7 @@ func (u *App) build() {
 	u.settingsTab.SetCallback(func() { u.Dispatch(u.showSettings) })
 	u.snapshotButton.SetCallback(u.snapshotNow)
 	u.compareButton.SetCallback(u.compareSelected)
+	u.cleanupButton.SetCallback(func() { u.Dispatch(u.openCleanupPanel) })
 	u.editButton.SetCallback(func() { u.Dispatch(u.editSnapshotDescription) })
 	u.warningsButton.SetCallback(func() { u.Dispatch(u.viewSnapshotWarnings) })
 	u.deleteButton.SetCallback(func() { u.Dispatch(u.deleteSelectedSnapshot) })
@@ -388,13 +411,106 @@ func (u *App) build() {
 	u.showIdleComparison("Select a folder and pick two snapshots.")
 }
 
+func (u *App) buildCleanupPage() {
+	u.cleanupPage = fltk.NewGroup(0, 46, 1180, 674)
+	u.cleanupPage.SetBox(fltk.FLAT_BOX)
+	u.cleanupPage.SetColor(colorWindow)
+	layout := fltk.NewFlex(0, 46, 1180, 674)
+	layout.SetType(fltk.COLUMN)
+	layout.SetMargin(space6, space4)
+	layout.SetGap(space3)
+	layout.SetColor(colorWindow)
+
+	header := fltk.NewFlex(0, 0, 1132, 72)
+	header.SetType(fltk.COLUMN)
+	header.SetGap(space1)
+	header.SetColor(colorWindow)
+	u.cleanupTitle = label("Delete newly created items", textHeading, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
+	u.cleanupTitle.SetLabelFont(fltk.HELVETICA_BOLD)
+	u.cleanupDescription = label("Choose Added items to move to the Windows Recycle Bin.", textMeta, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
+	u.cleanupDescription.SetLabelColor(colorSecondary)
+	header.Fixed(u.cleanupTitle, 28)
+	header.Fixed(u.cleanupDescription, 22)
+	header.End()
+
+	toolbar := fltk.NewFlex(0, 0, 1132, 38)
+	toolbar.SetType(fltk.ROW)
+	toolbar.SetGap(space2)
+	toolbar.SetColor(colorWindow)
+	u.cleanupSelectAll = styledButton("Select All", buttonSecondary)
+	u.cleanupDeselectAll = styledButton("Deselect All", buttonGhost)
+	u.cleanupSelection = label("0 items selected", textMeta, fltk.ALIGN_RIGHT|fltk.ALIGN_INSIDE)
+	u.cleanupSelection.SetLabelColor(colorSecondary)
+	toolbar.Fixed(u.cleanupSelectAll, 92)
+	toolbar.Fixed(u.cleanupDeselectAll, 104)
+	toolbar.End()
+
+	u.cleanupList = newCleanupPanelList(0, 0, 1132, 410, u.updateCleanupSelection)
+
+	u.cleanupReminder = label("", textMeta, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_WRAP)
+	u.cleanupReminder.SetLabelColor(colorModified)
+	u.cleanupReminder.SetDrawHandler(func(func()) {
+		drawRoundedFill(u.cleanupReminder.X(), u.cleanupReminder.Y(), u.cleanupReminder.W(), u.cleanupReminder.H(), radiusSmall, colorModifiedCard)
+		drawRoundedFrame(u.cleanupReminder.X(), u.cleanupReminder.Y(), u.cleanupReminder.W(), u.cleanupReminder.H(), radiusSmall, 0x55451500)
+		fltk.SetDrawColor(colorModified)
+		fltk.SetDrawFont(fltk.HELVETICA, textMeta)
+		fltk.Draw(u.cleanupReminder.Label(), u.cleanupReminder.X()+space4, u.cleanupReminder.Y(), u.cleanupReminder.W()-space8, u.cleanupReminder.H(), fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_WRAP|fltk.ALIGN_CLIP)
+	})
+
+	footer := fltk.NewFlex(0, 0, 1132, 42)
+	footer.SetType(fltk.ROW)
+	footer.SetGap(space2)
+	footer.SetColor(colorWindow)
+	safety := label("Nothing is selected by default. Files are checked again immediately before removal.", textSmall, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE)
+	safety.SetLabelColor(colorSecondary)
+	u.cleanupCancel = styledButton("Cancel", buttonSecondary)
+	u.cleanupDelete = styledButton("Move to Recycle Bin", buttonDestructive)
+	u.cleanupDelete.Deactivate()
+	footer.Fixed(u.cleanupCancel, 94)
+	footer.Fixed(u.cleanupDelete, 170)
+	footer.End()
+
+	layout.Fixed(header, 72)
+	layout.Fixed(toolbar, 38)
+	layout.Fixed(u.cleanupReminder, 52)
+	layout.Fixed(footer, 42)
+	layout.End()
+	u.cleanupPage.End()
+	u.cleanupPage.Hide()
+
+	u.cleanupSelectAll.SetCallback(func() {
+		if !u.cleanupBusy {
+			u.cleanupList.setAll(true)
+		}
+	})
+	u.cleanupDeselectAll.SetCallback(func() {
+		if !u.cleanupBusy {
+			u.cleanupList.setAll(false)
+		}
+	})
+	u.cleanupCancel.SetCallback(func() {
+		if !u.cleanupBusy {
+			u.showScreen(screenHistory)
+		}
+	})
+	u.cleanupDelete.SetCallback(func() {
+		if !u.cleanupBusy {
+			u.startCleanup()
+		}
+	})
+}
+
 func (u *App) showScreen(screen screenID) {
 	u.activeScreen = screen
-	if screen == screenHistory {
-		u.foldersPage.Hide()
+	u.foldersPage.Hide()
+	u.historyPage.Hide()
+	u.cleanupPage.Hide()
+	switch screen {
+	case screenHistory:
 		u.historyPage.Show()
-	} else {
-		u.historyPage.Hide()
+	case screenCleanup:
+		u.cleanupPage.Show()
+	default:
 		u.foldersPage.Show()
 	}
 	u.foldersTab.Redraw()
@@ -706,6 +822,7 @@ func (u *App) compareSelected() {
 	u.changesCards.clear()
 	u.changesCards.showEmpty("Working…")
 	u.compareButton.Deactivate()
+	u.cleanupButton.Deactivate()
 	go func() {
 		before, err := u.service.LoadSnapshot(rootID, beforeID)
 		if err == nil {
@@ -787,6 +904,7 @@ func (u *App) renderDiff() {
 	}
 	u.changesCards.finishBatch()
 	u.renderResultNavigation(page.Total, page.Start, page.End)
+	u.updateCleanupAvailability()
 	if page.Total == 0 {
 		message := "No changed items in this comparison."
 		if query != "" || u.filter != "" {
@@ -844,6 +962,7 @@ func (u *App) showIdleComparison(message string) {
 	u.renderResultNavigation(0, 0, 0)
 	u.renderFilterState()
 	u.updateCompareButton()
+	u.updateCleanupAvailability()
 }
 
 func (u *App) showComparisonError(message string) {
@@ -857,6 +976,7 @@ func (u *App) showComparisonError(message string) {
 	u.changesCards.showEmpty(message)
 	u.renderResultNavigation(0, 0, 0)
 	u.renderFilterState()
+	u.updateCleanupAvailability()
 }
 
 func (u *App) setMetricPlaceholders() {
@@ -872,6 +992,14 @@ func (u *App) updateCompareButton() {
 		u.compareButton.Activate()
 	} else {
 		u.compareButton.Deactivate()
+	}
+}
+
+func (u *App) updateCleanupAvailability() {
+	if u.compareState == comparisonDone && len(cleanup.Plan(u.diff)) > 0 {
+		u.cleanupButton.Activate()
+	} else {
+		u.cleanupButton.Deactivate()
 	}
 }
 
@@ -909,76 +1037,133 @@ func (u *App) snapshotNow() {
 	}
 }
 
-func (u *App) reviewCleanup() {
+func (u *App) openCleanupPanel() {
+	if u.compareState != comparisonDone {
+		return
+	}
 	candidates := cleanup.Plan(u.diff)
 	if len(candidates) == 0 {
-		return
-	}
-	win := newModalWindow(760, 560, "Review Added Items for Cleanup")
-	list := fltk.NewCheckBrowser(16, 48, 728, 440)
-	styleWidget(list)
-	states := make([]bool, len(candidates))
-	for _, item := range candidates {
-		list.Add(strings.Repeat("  ", strings.Count(item.Path, "/"))+item.Entry.DisplayPath, false)
-	}
-	list.SetCallback(func() {
-		for i := range candidates {
-			checked := list.IsChecked(i + 1)
-			if checked == states[i] {
-				continue
-			}
-			states[i] = checked
-			if candidates[i].Entry.Type == model.EntryDirectory {
-				prefix := candidates[i].Path + "/"
-				for j := range candidates {
-					if strings.HasPrefix(candidates[j].Path, prefix) {
-						states[j] = checked
-						list.SetChecked(j+1, checked)
-					}
-				}
-			}
-			break
-		}
-	})
-	message := fltk.NewBox(fltk.NO_BOX, 16, 12, 728, 28, "Nothing is selected by default. Current files are revalidated before removal.")
-	message.SetAlign(fltk.ALIGN_LEFT | fltk.ALIGN_INSIDE)
-	cancel := placedButton(492, 504, 110, 38, "Cancel", buttonSecondary)
-	preflight := placedButton(612, 504, 132, 38, "Run Preflight", buttonPrimary)
-	clearButtonFocus(cancel, preflight)
-	accepted := false
-	cancel.SetCallback(func() { closeModalWindow(win) })
-	preflight.SetCallback(func() { accepted = true; closeModalWindow(win) })
-	win.End()
-	showModalWindow(win)
-	for win.IsShown() {
-		fltk.Wait()
-	}
-	if !accepted {
-		return
-	}
-	selected := make([]cleanup.Candidate, 0)
-	for i, candidate := range candidates {
-		if states[i] {
-			selected = append(selected, candidate)
-		}
-	}
-	if len(selected) == 0 {
-		fltk.MessageBox("Nothing selected", "Select at least one Added item.")
 		return
 	}
 	root, ok := u.service.Root(u.selectedRootID)
 	if !ok {
 		return
 	}
-	u.status.SetLabel("Validating cleanup selection...")
-	go u.runCleanup(root, selected)
+	u.cleanupRootID = root.RootID
+	u.cleanupBeforeID = u.diff.BeforeID
+	u.cleanupAfterID = u.diff.AfterID
+	u.cleanupTitle.SetLabel("Delete newly created items")
+	u.cleanupDescription.SetLabel(fmt.Sprintf("%s  ·  %d Added items are eligible for review. Selected items will be moved to the Windows Recycle Bin.", u.comparisonTitle(), len(candidates)))
+	u.cleanupReminder.SetLabel(fmt.Sprintf("Only Added items can be selected here. %d modified and %d removed items are excluded and will not be touched.", u.diff.Summary.Modified, u.diff.Summary.Removed))
+	u.cleanupList.setCandidates(candidates)
+	u.setCleanupBusy(false)
+	u.updateCleanupSelection()
+	u.showScreen(screenCleanup)
 }
 
-func (u *App) runCleanup(root model.WatchedRoot, selected []cleanup.Candidate) {
+func (u *App) updateCleanupSelection() {
+	if u.cleanupList == nil || u.cleanupList.selection == nil {
+		return
+	}
+	count, size := u.cleanupList.selection.stats()
+	if count == 0 {
+		u.cleanupSelection.SetLabel("0 items selected")
+		u.cleanupDelete.Deactivate()
+	} else {
+		u.cleanupSelection.SetLabel(fmt.Sprintf("%d items selected  ·  %s in files", count, formatBytes(size)))
+		if !u.cleanupBusy {
+			u.cleanupDelete.Activate()
+		}
+	}
+	u.cleanupSelection.Redraw()
+}
+
+func (u *App) setCleanupBusy(busy bool) {
+	u.cleanupBusy = busy
+	if busy {
+		u.cleanupSelectAll.Deactivate()
+		u.cleanupDeselectAll.Deactivate()
+		u.cleanupCancel.Deactivate()
+		u.cleanupDelete.Deactivate()
+		u.cleanupList.table.Deactivate()
+		return
+	}
+	u.cleanupSelectAll.Activate()
+	u.cleanupDeselectAll.Activate()
+	u.cleanupCancel.Activate()
+	u.cleanupList.table.Activate()
+	u.updateCleanupSelection()
+}
+
+func (u *App) startCleanup() {
+	selected := u.cleanupList.selection.chosen()
+	if len(selected) == 0 {
+		return
+	}
+	root, ok := u.service.Root(u.cleanupRootID)
+	if !ok {
+		fltk.MessageBox("Folder unavailable", "The watched folder is no longer configured.")
+		return
+	}
+	beforeID, afterID := u.cleanupBeforeID, u.cleanupAfterID
+	u.setCleanupBusy(true)
+	u.status.SetLabel("Validating cleanup selection...")
+	go u.preflightCleanup(root, beforeID, afterID, selected)
+}
+
+func (u *App) preflightCleanup(root model.WatchedRoot, beforeID, afterID string, selected []cleanup.Candidate) {
 	service := cleanup.Service{RootPath: root.Path, Recycler: platform.RecycleBin{}}
 	preflight := service.Preflight(context.Background(), selected)
-	ready, blocked, missing := 0, 0, 0
-	for _, item := range preflight {
+	ready, blocked, missing := cleanupResultCounts(preflight)
+	u.Dispatch(func() {
+		u.status.SetLabel("Cleanup preflight complete")
+		if ready == 0 {
+			u.setCleanupBusy(false)
+			fltk.MessageBox("Nothing can be removed", fmt.Sprintf("Ready: 0\nBlocked because the current item changed or is unsafe: %d\nAlready missing: %d", blocked, missing))
+			return
+		}
+		message := fmt.Sprintf("Move %d item(s) to the Windows Recycle Bin?\n\nBlocked and changed items: %d\nAlready missing: %d\n\nFolderSnap will validate every ready item again immediately before moving it.", ready, blocked, missing)
+		if !confirmDialog("Confirm Recycle Bin move", message, fmt.Sprintf("Move %d Items", ready), true) {
+			u.setCleanupBusy(false)
+			return
+		}
+		u.status.SetLabel("Moving items to Recycle Bin...")
+		go u.executeCleanup(service, root, beforeID, afterID, preflight)
+	})
+}
+
+func (u *App) executeCleanup(service cleanup.Service, root model.WatchedRoot, beforeID, afterID string, preflight []cleanup.PreflightItem) {
+	results := service.Execute(context.Background(), preflight)
+	auditErr := cleanup.WriteAudit(u.service.DataDir(), root.RootID, beforeID, afterID, results)
+	moved, failed := 0, 0
+	blocked, missing := 0, 0
+	for _, item := range results {
+		switch item.Status {
+		case cleanup.StatusMoved:
+			moved++
+		case cleanup.StatusFailed:
+			failed++
+		case cleanup.StatusAlreadyMissing:
+			missing++
+		default:
+			blocked++
+		}
+	}
+	u.Dispatch(func() {
+		u.setCleanupBusy(false)
+		u.cleanupList.setAll(false)
+		u.status.SetLabel("Cleanup complete")
+		message := fmt.Sprintf("Moved to Recycle Bin: %d\nBlocked or changed: %d\nAlready missing: %d\nFailed: %d", moved, blocked, missing, failed)
+		if auditErr != nil {
+			message += "\n\nWarning: the cleanup audit could not be saved:\n" + auditErr.Error()
+		}
+		message += "\n\nHistorical snapshots were not changed. Take a new snapshot to record the folder's current state."
+		fltk.MessageBox("Cleanup result", message)
+	})
+}
+
+func cleanupResultCounts(results []cleanup.PreflightItem) (ready, blocked, missing int) {
+	for _, item := range results {
 		switch item.Status {
 		case cleanup.StatusReady:
 			ready++
@@ -988,33 +1173,7 @@ func (u *App) runCleanup(root model.WatchedRoot, selected []cleanup.Candidate) {
 			blocked++
 		}
 	}
-	u.Dispatch(func() {
-		u.status.SetLabel("Cleanup preflight complete")
-		if ready == 0 {
-			fltk.MessageBox("Nothing can be removed", fmt.Sprintf("Ready: 0\nBlocked: %d\nAlready missing: %d", blocked, missing))
-			return
-		}
-		if !confirmDialog("Cleanup preflight complete", fmt.Sprintf("Ready to move to Recycle Bin: %d\nBlocked: %d\nAlready missing: %d", ready, blocked, missing), fmt.Sprintf("Move %d items", ready), true) {
-			return
-		}
-		u.status.SetLabel("Moving items to Recycle Bin...")
-		go func() {
-			results := service.Execute(context.Background(), preflight)
-			_ = cleanup.WriteAudit(u.service.DataDir(), root.RootID, u.diff.BeforeID, u.diff.AfterID, results)
-			moved, failed := 0, 0
-			for _, item := range results {
-				if item.Status == cleanup.StatusMoved {
-					moved++
-				} else if item.Status == cleanup.StatusFailed {
-					failed++
-				}
-			}
-			u.Dispatch(func() {
-				u.status.SetLabel("Cleanup complete")
-				fltk.MessageBox("Cleanup result", fmt.Sprintf("Moved to Recycle Bin: %d\nFailed: %d\n\nHistorical snapshots were not changed. Take a new snapshot to record current state.", moved, failed))
-			})
-		}()
-	})
+	return ready, blocked, missing
 }
 
 func (u *App) editSnapshotDescription() {

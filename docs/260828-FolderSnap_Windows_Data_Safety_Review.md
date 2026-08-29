@@ -31,6 +31,8 @@ The review found and corrected the following high-priority risks:
 - Cleanup rejects lexical traversal and any reparse-point ancestor below the selected root.
 - Cleanup revalidates size, timestamps, type, link target, directory contents, and containment immediately before Recycle Bin execution.
 - Cleanup has no default selections and never falls back to permanent deletion when the Recycle Bin operation fails.
+- The deletion panel is limited to eligible Added entries; partially selected folder trees clear ancestor-directory selection so the parent itself cannot be removed with unselected descendants.
+- Windows cleanup containment and directory-content matching use case-insensitive canonical path keys.
 - Configuration/root getters return defensive copies of ignore-rule slices.
 
 ## Residual product limitations

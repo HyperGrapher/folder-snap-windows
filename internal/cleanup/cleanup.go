@@ -72,7 +72,7 @@ func Plan(diff model.DiffResult) []Candidate {
 func (s Service) Preflight(ctx context.Context, selected []Candidate) []PreflightItem {
 	known := make(map[string]Candidate, len(selected))
 	for _, item := range selected {
-		known[item.Path] = item
+		known[canonicalPathKey(item.Path)] = item
 	}
 	results := make([]PreflightItem, 0, len(selected))
 	for _, candidate := range selected {
@@ -146,9 +146,9 @@ func (s Service) Preflight(ctx context.Context, selected []Candidate) []Prefligh
 		if results[i].Status != StatusReady || results[i].Candidate.Entry.Type != model.EntryDirectory {
 			continue
 		}
-		prefix := results[i].Candidate.Path + "/"
+		prefix := canonicalPathKey(results[i].Candidate.Path) + "/"
 		for _, child := range results {
-			if strings.HasPrefix(child.Candidate.Path, prefix) && child.Status != StatusReady && child.Status != StatusAlreadyMissing {
+			if strings.HasPrefix(canonicalPathKey(child.Candidate.Path), prefix) && child.Status != StatusReady && child.Status != StatusAlreadyMissing {
 				results[i].Status = StatusContainsUntracked
 				results[i].Reason = "a selected descendant did not pass preflight: " + child.Candidate.Path
 				break
@@ -322,8 +322,8 @@ func containsUntracked(directory, relative string, selected map[string]Candidate
 		if err != nil {
 			return err
 		}
-		candidatePath := strings.Trim(relative+"/"+strings.ToLower(filepath.ToSlash(rel)), "/")
-		if _, ok := selected[candidatePath]; !ok {
+		candidatePath := strings.Trim(relative+"/"+filepath.ToSlash(rel), "/")
+		if _, ok := selected[canonicalPathKey(candidatePath)]; !ok {
 			return fmt.Errorf("%w:%s", errExtraContent, candidatePath)
 		}
 		if info, err := entry.Info(); err == nil && typeOf(info) == model.EntryReparse && entry.IsDir() {
@@ -344,3 +344,11 @@ func containsUntracked(directory, relative string, selected map[string]Candidate
 }
 
 var errExtraContent = errors.New("extra content")
+
+// Snapshot paths are normalized for comparisons, but their display casing can
+// still reflect the filesystem. Windows containment checks must therefore use
+// one canonical key or a valid mixed-case directory tree can be mistaken for
+// untracked content.
+func canonicalPathKey(path string) string {
+	return strings.ToLower(strings.Trim(filepath.ToSlash(path), "/"))
+}
