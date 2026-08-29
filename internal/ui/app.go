@@ -1525,8 +1525,8 @@ func metricCard(text string, color fltk.Color) *fltk.Box {
 	box := fltk.NewBox(fltk.NO_BOX, 0, 0, 120, 94, text)
 	box.SetDrawHandler(func(func()) {
 		x, y, width, height := box.X(), box.Y(), box.W(), box.H()
-		fltk.DrawBox(fltk.RFLAT_BOX, x, y, width, height, colorPanel)
-		fltk.DrawBox(fltk.ROUNDED_FRAME, x, y, width, height, colorDivider)
+		drawRoundedFill(x, y, width, height, radiusLarge, colorPanel)
+		drawRoundedFrame(x, y, width, height, radiusLarge, colorDivider)
 		fltk.DrawRectfWithColor(x+1, y+1, width-2, 3, color)
 		parts := strings.SplitN(box.Label(), "\n", 2)
 		caption, value := parts[0], "—"

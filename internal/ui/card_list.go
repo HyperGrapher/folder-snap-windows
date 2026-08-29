@@ -92,7 +92,7 @@ func drawChangeCard(button *fltk.Button, card changeCardStyle) {
 	case "modified":
 		accent, background = 0xC18A4200, colorModifiedCard
 	}
-	fltk.DrawBox(fltk.RFLAT_BOX, x, y, width, height, background)
+	drawRoundedFill(x, y, width, height, radiusSmall, background)
 	fltk.DrawRectfWithColor(x, y+1, 4, height-2, accent)
 
 	if card.Directory {
@@ -105,7 +105,7 @@ func drawChangeCard(button *fltk.Button, card changeCardStyle) {
 	}
 
 	statusX, statusWidth := x+43, 72
-	fltk.DrawBox(fltk.RFLAT_BOX, statusX, y+12, statusWidth, 22, colorRaised)
+	drawRoundedFill(statusX, y+12, statusWidth, 22, 8, colorRaised)
 	fltk.SetDrawColor(accent)
 	fltk.SetDrawFont(fltk.HELVETICA_BOLD, 9)
 	fltk.Draw(card.Status, statusX, y+12, statusWidth, 22, fltk.ALIGN_CENTER|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
@@ -169,8 +169,8 @@ func drawFolderCard(button *fltk.Button, card folderCardStyle) {
 	if card.Selected {
 		background, border = colorCardSelected, colorAccent
 	}
-	fltk.DrawBox(fltk.RFLAT_BOX, x, y, width, height, background)
-	fltk.DrawBox(fltk.ROUNDED_FRAME, x, y, width, height, border)
+	drawRoundedFill(x, y, width, height, radiusLarge, background)
+	drawRoundedFrame(x, y, width, height, radiusLarge, border)
 
 	iconColor := colorFolderIcon
 	if card.Unavailable {
@@ -189,7 +189,7 @@ func drawFolderCard(button *fltk.Button, card folderCardStyle) {
 	fltk.Draw(card.Path, x+44, y+28, textWidth, 18, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
 	fltk.Draw(card.Meta, x+14, y+49, width-28, 17, fltk.ALIGN_LEFT|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
 
-	fltk.DrawBox(fltk.RFLAT_BOX, x+width-badgeWidth-12, y+12, badgeWidth, 24, colorRaised)
+	drawRoundedFill(x+width-badgeWidth-12, y+12, badgeWidth, 24, radiusSmall, colorRaised)
 	fltk.SetDrawColor(colorText)
 	fltk.SetDrawFont(fltk.HELVETICA_BOLD, 11)
 	fltk.Draw(intString(card.Count), x+width-badgeWidth-12, y+12, badgeWidth, 24, fltk.ALIGN_CENTER|fltk.ALIGN_INSIDE)
@@ -219,11 +219,11 @@ func drawSnapshotCard(button *fltk.Button, card snapshotCardStyle) {
 	if card.Missing {
 		border = colorRemovedCard
 	}
-	fltk.DrawBox(fltk.RFLAT_BOX, x, y, width, height, background)
+	drawRoundedFill(x, y, width, height, radiusSmall, background)
 	if card.Role != "" {
 		fltk.DrawRectfWithColor(x, y+1, 3, height-2, roleColor)
 	} else if card.Selected || card.Missing {
-		fltk.DrawBox(fltk.ROUNDED_FRAME, x, y, width, height, border)
+		drawRoundedFrame(x, y, width, height, radiusSmall, border)
 	}
 
 	textWidth := width - 54
@@ -242,7 +242,7 @@ func drawSnapshotCard(button *fltk.Button, card snapshotCardStyle) {
 	if card.Role != "" {
 		badgeColor := roleColor
 		badgeSize := 22
-		fltk.DrawBox(fltk.OFLAT_BOX, x+width-badgeSize-16, y+(height-badgeSize)/2, badgeSize, badgeSize, badgeColor)
+		drawRoundedFill(x+width-badgeSize-16, y+(height-badgeSize)/2, badgeSize, badgeSize, 5, badgeColor)
 		textColor := colorText
 		if card.Role == "B" {
 			textColor = colorWindow

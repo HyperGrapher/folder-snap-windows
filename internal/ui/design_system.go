@@ -14,6 +14,9 @@ const (
 	textMeta    = 12
 	textBody    = 13
 	textHeading = 17
+
+	radiusSmall = 6
+	radiusLarge = 9
 )
 
 const (
@@ -102,8 +105,8 @@ func styleCheckButton(button *fltk.CheckButton) {
 		if button.Value() {
 			background, border = colorAccent, colorAccent
 		}
-		fltk.DrawBox(fltk.RFLAT_BOX, x, checkY, size, size, background)
-		fltk.DrawBox(fltk.ROUNDED_FRAME, x, checkY, size, size, border)
+		drawRoundedFill(x, checkY, size, size, 4, background)
+		drawRoundedFrame(x, checkY, size, size, 4, border)
 		if button.Value() {
 			fltk.DrawCheck(x+2, checkY+2, size-4, size-4, colorText)
 		}
@@ -114,17 +117,18 @@ func styleCheckButton(button *fltk.CheckButton) {
 }
 
 func styleInput(input *fltk.Input) {
-	input.SetBox(fltk.RFLAT_BOX)
+	input.SetBox(fltk.NO_BOX)
 	input.SetColor(colorInput)
 	input.SetSelectionColor(colorAccent)
 	input.SetLabelColor(colorText)
 	input.SetDrawHandler(func(baseDraw func()) {
+		drawRoundedFill(input.X(), input.Y(), input.W(), input.H(), radiusSmall, colorInput)
 		baseDraw()
 		border := colorBorder
 		if input.HasFocus() {
 			border = colorAccent
 		}
-		fltk.DrawBox(fltk.ROUNDED_FRAME, input.X(), input.Y(), input.W(), input.H(), border)
+		drawRoundedFrame(input.X(), input.Y(), input.W(), input.H(), radiusSmall, border)
 	})
 }
 
@@ -177,10 +181,10 @@ func drawStyledButton(button *fltk.Button, variant buttonVariant, state *buttonV
 	if variant == buttonTab {
 		fltk.DrawRectfWithColor(x, y, width, height-8, background)
 	} else {
-		fltk.DrawBox(fltk.RFLAT_BOX, x, y, width, height, background)
+		drawRoundedFill(x, y, width, height, radiusSmall, background)
 	}
 	if variant != buttonGhost && variant != buttonTab {
-		fltk.DrawBox(fltk.ROUNDED_FRAME, x, y, width, height, border)
+		drawRoundedFrame(x, y, width, height, radiusSmall, border)
 	}
 	if variant == buttonTab && active {
 		fltk.DrawRectfWithColor(x+space2, y+height-2, width-space4, 2, colorAccent)
@@ -192,6 +196,58 @@ func drawStyledButton(button *fltk.Button, variant buttonVariant, state *buttonV
 		textHeight = height - 8
 	}
 	fltk.Draw(button.Label(), x+space2, y, width-space4, textHeight, fltk.ALIGN_CENTER|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+}
+
+// FLTK's themed RFLAT/ROUNDED boxes use scheme-dependent radii that are much
+// larger than the mockup tokens. These primitives keep the visual language
+// deterministic across Windows themes and DPI settings.
+func drawRoundedFill(x, y, width, height, radius int, color fltk.Color) {
+	radius = clampRadius(width, height, radius)
+	if radius == 0 {
+		fltk.DrawRectfWithColor(x, y, width, height, color)
+		return
+	}
+	fltk.DrawRectfWithColor(x+radius, y, width-2*radius, height, color)
+	fltk.DrawRectfWithColor(x, y+radius, width, height-2*radius, color)
+	fltk.SetDrawColor(color)
+	fltk.DrawPie(x, y, radius*2, radius*2, 90, 180)
+	fltk.DrawPie(x+width-radius*2, y, radius*2, radius*2, 0, 90)
+	fltk.DrawPie(x+width-radius*2, y+height-radius*2, radius*2, radius*2, 270, 360)
+	fltk.DrawPie(x, y+height-radius*2, radius*2, radius*2, 180, 270)
+}
+
+func drawRoundedFrame(x, y, width, height, radius int, color fltk.Color) {
+	radius = clampRadius(width, height, radius)
+	if radius == 0 {
+		fltk.DrawRectWithColor(x, y, width, height, color)
+		return
+	}
+	fltk.SetDrawColor(color)
+	fltk.DrawLine(x+radius, y, x+width-radius-1, y)
+	fltk.DrawLine(x+radius, y+height-1, x+width-radius-1, y+height-1)
+	fltk.DrawLine(x, y+radius, x, y+height-radius-1)
+	fltk.DrawLine(x+width-1, y+radius, x+width-1, y+height-radius-1)
+	fltk.DrawArc(x, y, radius*2, radius*2, 90, 180)
+	fltk.DrawArc(x+width-radius*2-1, y, radius*2, radius*2, 0, 90)
+	fltk.DrawArc(x+width-radius*2-1, y+height-radius*2-1, radius*2, radius*2, 270, 360)
+	fltk.DrawArc(x, y+height-radius*2-1, radius*2, radius*2, 180, 270)
+}
+
+func clampRadius(width, height, radius int) int {
+	if radius < 0 {
+		return 0
+	}
+	if max := minInt(width, height) / 2; radius > max {
+		return max
+	}
+	return radius
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func panelBox(color fltk.Color) *fltk.Box {

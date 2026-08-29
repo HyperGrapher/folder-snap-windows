@@ -189,8 +189,8 @@ func drawFolderRow(x, y, width, height int, card folderRowStyle, hovered, presse
 	if card.Selected {
 		border = colorAccent
 	}
-	fltk.DrawBox(fltk.RFLAT_BOX, x, y, width, height, background)
-	fltk.DrawBox(fltk.ROUNDED_FRAME, x, y, width, height, border)
+	drawRoundedFill(x, y, width, height, radiusLarge, background)
+	drawRoundedFrame(x, y, width, height, radiusLarge, border)
 
 	statusColor := colorAdded
 	if card.Unavailable || card.Archived {
@@ -200,7 +200,7 @@ func drawFolderRow(x, y, width, height int, card folderRowStyle, hovered, presse
 	fltk.DrawPie(x+space4, y+height/2-4, 8, 8, 0, 360)
 
 	iconX, iconY := x+space8, y+21
-	fltk.DrawBox(fltk.RFLAT_BOX, iconX, iconY, 44, 44, colorRaised)
+	drawRoundedFill(iconX, iconY, 44, 44, 10, colorRaised)
 	fltk.DrawRectfWithColor(iconX+11, iconY+17, 23, 16, 0xD6A65700)
 	fltk.DrawRectfWithColor(iconX+13, iconY+13, 11, 6, 0xD6A65700)
 
@@ -240,8 +240,8 @@ func drawSchedulePill(x, y, width int, value string, muted bool) {
 	if muted {
 		background, border, foreground = colorInput, colorBorder, colorSecondary
 	}
-	fltk.DrawBox(fltk.RFLAT_BOX, x, y, width, 26, background)
-	fltk.DrawBox(fltk.ROUNDED_FRAME, x, y, width, 26, border)
+	drawRoundedFill(x, y, width, 26, 13, background)
+	drawRoundedFrame(x, y, width, 26, 13, border)
 	fltk.SetDrawColor(foreground)
 	fltk.SetDrawFont(fltk.HELVETICA_BOLD, 10)
 	fltk.Draw(value, x+space1, y, width-space2, 26, fltk.ALIGN_CENTER|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
