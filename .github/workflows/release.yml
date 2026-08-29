@@ -40,41 +40,51 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+
+      # go-fltk ships prebuilt Windows archives, but those archives were built
+      # with an older MinGW CRT and cannot be linked by current GCC releases
+      # (_setjmp is the first incompatible symbol). Rebuilding them here keeps
+      # FLTK and the final executable on exactly the same compiler and CRT.
+      - name: Rebuild FLTK for the runner toolchain
+        shell: msys2 {0}
+        run: |
+          fltk_dir="$(go list -m -f '{{.Dir}}' github.com/pwiecz/go-fltk)"
+          fltk_dir="$(cygpath -u "$fltk_dir")"
+          chmod -R u+w "$fltk_dir"
+          cd "$fltk_dir"
+          go generate
 
       - name: Verify tag and toolchain
-        shell: pwsh
+        shell: msys2 {0}
         run: |
-          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+$') {
-            throw "Release tags must use semantic version form v1.2.3 (got '$env:GITHUB_REF_NAME')."
-          }
-          $env:Path = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:Path"
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must use semantic version form v1.2.3 (got '$GITHUB_REF_NAME')." >&2
+            exit 1
+          fi
           go version
-          gcc --version | Select-Object -First 1
-          g++ --version | Select-Object -First 1
-          windres --version | Select-Object -First 1
+          gcc --version | head -n 1
+          g++ --version | head -n 1
+          windres --version | head -n 1
+          cmake --version | head -n 1
 
       - name: Run tests
-        shell: pwsh
+        shell: msys2 {0}
         run: |
-          $env:Path = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:Path"
           go test -count=1 ./...
           go vet ./...
 
       - name: Build release executable
-        shell: pwsh
+        shell: msys2 {0}
         run: |
-          $env:Path = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:Path"
-          # Keep the CRT compatibility libraries explicit in CI as well as in
-          # scripts/build.ps1; go-fltk's bundled image archives reference the
-          # MSVCRT _setjmp entry point.
-          $env:CGO_LDFLAGS = "-lmsvcrt -lmingwex"
-          .\scripts\build.ps1 -Configuration Release
-          if (-not (Test-Path .\bin\FolderSnap.exe)) {
-            throw 'The release executable was not produced.'
-          }
-          Get-FileHash .\bin\FolderSnap.exe -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash)  FolderSnap.exe" } |
-            Set-Content .\bin\FolderSnap.sha256 -Encoding ascii
+          mkdir -p bin
+          windres --target=pe-x86-64 --input-format=rc --output-format=coff \
+            -i assets/foldersnap.rc -o cmd/foldersnap/foldersnap_windows_amd64.syso
+          go build -trimpath -o bin/FolderSnap.exe \
+            -ldflags='-H=windowsgui -s -w -linkmode external -extldflags "-static -static-libgcc -static-libstdc++"' \
+            ./cmd/foldersnap
+          test -f bin/FolderSnap.exe
+          sha256sum bin/FolderSnap.exe | sed 's#bin/##' > bin/FolderSnap.sha256
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
