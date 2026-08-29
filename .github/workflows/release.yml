@@ -64,6 +64,10 @@ jobs:
         shell: pwsh
         run: |
           $env:Path = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:Path"
+          # Keep the CRT compatibility libraries explicit in CI as well as in
+          # scripts/build.ps1; go-fltk's bundled image archives reference the
+          # MSVCRT _setjmp entry point.
+          $env:CGO_LDFLAGS = "-lmsvcrt -lmingwex"
           .\scripts\build.ps1 -Configuration Release
           if (-not (Test-Path .\bin\FolderSnap.exe)) {
             throw 'The release executable was not produced.'

@@ -19,10 +19,10 @@ $arguments = @('build', '-trimpath', '-o', (Join-Path $outputDir 'FolderSnap.exe
 if ($Configuration -eq 'Release') {
     # go-fltk is static, but MinGW's C++ runtime is dynamic unless the external
     # linker is told to include libgcc/libstdc++ as well.
-    # libfltk_png.a uses setjmp/longjmp. Newer MinGW distributions no longer
-    # pull libmingwex in implicitly for a static cgo link, so keep it explicit
-    # to make CI and local release toolchains behave consistently.
-    $arguments += @('-ldflags', '-H=windowsgui -s -w -linkmode external -extldflags "-static -static-libgcc -static-libstdc++ -lmingwex"')
+    # The bundled FLTK image archives were built against the MSVCRT setjmp
+    # entry points. Newer MinGW static links do not always pull these imports
+    # in automatically, so keep both CRT libraries explicit.
+    $arguments += @('-ldflags', '-H=windowsgui -s -w -linkmode external -extldflags "-static -static-libgcc -static-libstdc++ -lmsvcrt -lmingwex"')
 }
 $arguments += './cmd/foldersnap'
 
