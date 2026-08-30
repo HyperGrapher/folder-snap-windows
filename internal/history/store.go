@@ -126,7 +126,10 @@ func (s *Store) Save(snapshot model.Snapshot, retention int) (model.SnapshotReco
 
 	payloadPath := s.snapshotPath(snapshot.Header.SnapshotID)
 	if err := atomicfile.Write(payloadPath, 0o600, func(file *os.File) error {
-		compressed := gzip.NewWriter(file)
+		compressed, err := gzip.NewWriterLevel(file, gzip.BestSpeed)
+		if err != nil {
+			return err
+		}
 		if err := json.NewEncoder(compressed).Encode(snapshot); err != nil {
 			_ = compressed.Close()
 			return err
@@ -189,9 +192,11 @@ func (s *Store) load(snapshotID string) (model.Snapshot, error) {
 	if err := pathutil.ValidateStorageID(snapshot.Header.RootID); err != nil {
 		return model.Snapshot{}, err
 	}
-	if err := validateEntryPaths(snapshot.Entries); err != nil {
+	entriesSorted, err := validateAndCheckEntryPaths(snapshot.Entries)
+	if err != nil {
 		return model.Snapshot{}, err
 	}
+	snapshot.EntriesSorted = entriesSorted
 	return snapshot, nil
 }
 
@@ -572,11 +577,20 @@ func validateIDs(rootID, snapshotID string) error {
 }
 
 func validateEntryPaths(entries []model.SnapshotEntry) error {
-	for _, entry := range entries {
+	_, err := validateAndCheckEntryPaths(entries)
+	return err
+}
+
+func validateAndCheckEntryPaths(entries []model.SnapshotEntry) (bool, error) {
+	sorted := true
+	for index, entry := range entries {
 		normalized, err := pathutil.NormalizeRelative(entry.RelativePath)
 		if err != nil || normalized == "" || normalized != entry.RelativePath {
-			return fmt.Errorf("snapshot contains unsafe entry path %q", entry.RelativePath)
+			return false, fmt.Errorf("snapshot contains unsafe entry path %q", entry.RelativePath)
+		}
+		if index > 0 && entries[index-1].RelativePath > entry.RelativePath {
+			sorted = false
 		}
 	}
-	return nil
+	return sorted, nil
 }

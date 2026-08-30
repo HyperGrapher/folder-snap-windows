@@ -76,6 +76,8 @@ func BenchmarkCompareLargeMostlyUnchanged(b *testing.B) {
 	afterEntries[count-1].Size++
 	before := snapshot("before", 1, beforeEntries)
 	after := snapshot("after", 2, afterEntries)
+	before.EntriesSorted = true
+	after.EntriesSorted = true
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -86,11 +88,33 @@ func BenchmarkCompareLargeMostlyUnchanged(b *testing.B) {
 	}
 }
 
+func BenchmarkCompareLargeChangeSet(b *testing.B) {
+	const count = 50_000
+	beforeEntries := make([]model.SnapshotEntry, count)
+	afterEntries := make([]model.SnapshotEntry, count)
+	for index := range count {
+		beforeEntries[index] = entry(fmt.Sprintf("removed/item-%06d.dat", index), model.EntryFile, 64, 10)
+		afterEntries[index] = entry(fmt.Sprintf("added/item-%06d.dat", index), model.EntryFile, 64, 10)
+	}
+	before := snapshot("before", 1, beforeEntries)
+	after := snapshot("after", 2, afterEntries)
+	before.EntriesSorted = true
+	after.EntriesSorted = true
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		result, err := (Engine{}).Compare(before, after)
+		if err != nil || len(result.Entries) != count*2 {
+			b.Fatalf("entries=%d err=%v", len(result.Entries), err)
+		}
+	}
+}
+
 func TestUncertaintyAndScope(t *testing.T) {
 	before := snapshot("before", 1, nil)
 	before.Header.ScanWarnings = []model.ScanWarning{{Path: "blocked", Operation: "enumerate"}}
 	before.Header.IgnoreConfig.Rules = []string{"generated/"}
-	after := snapshot("after", 2, []model.SnapshotEntry{entry("blocked/a", model.EntryFile, 1, 1), entry("generated/a", model.EntryFile, 1, 1)})
+	after := snapshot("after", 2, []model.SnapshotEntry{entry("Blocked/a", model.EntryFile, 1, 1), entry("generated/a", model.EntryFile, 1, 1)})
 	result, err := (Engine{}).Compare(before, after)
 	if err != nil {
 		t.Fatal(err)
@@ -129,6 +153,52 @@ func TestChangesUseMacOSGroupAndNaturalPathOrder(t *testing.T) {
 	for i := range want {
 		if paths[i] != want[i] {
 			t.Fatalf("paths = %v, want %v", paths, want)
+		}
+	}
+}
+
+func TestLargeDiffOrderingGroupsAndSortsConcurrently(t *testing.T) {
+	const count = 12_000
+	changes := []model.ChangeType{model.ChangeModified, model.ChangeAdded, model.ChangeRemoved}
+	entries := make([]model.DiffEntry, count)
+	for index := range count {
+		path := fmt.Sprintf("folder/file%d.txt", count-index)
+		entries[index] = model.DiffEntry{Path: path, DisplayPath: path, Change: changes[index%len(changes)]}
+	}
+	orderDiffEntries(entries)
+	rank := func(change model.ChangeType) int {
+		switch change {
+		case model.ChangeAdded:
+			return 0
+		case model.ChangeRemoved:
+			return 1
+		default:
+			return 2
+		}
+	}
+	for index := 1; index < len(entries); index++ {
+		previousRank, currentRank := rank(entries[index-1].Change), rank(entries[index].Change)
+		if previousRank > currentRank {
+			t.Fatalf("change groups out of order at %d: %s before %s", index, entries[index-1].Change, entries[index].Change)
+		}
+		if previousRank == currentRank && naturalPathLess(entries[index].DisplayPath, entries[index-1].DisplayPath) {
+			t.Fatalf("paths out of natural order at %d: %q before %q", index, entries[index-1].DisplayPath, entries[index].DisplayPath)
+		}
+	}
+}
+
+func TestEntryArenaPointersRemainStableAcrossChunks(t *testing.T) {
+	var arena entryArena
+	const count = 3_000
+	entries := make([]*model.SnapshotEntry, count)
+	for index := range count {
+		path := fmt.Sprintf("file-%d", index)
+		entries[index] = arena.copy(entry(path, model.EntryFile, int64(index), 10))
+	}
+	for index, item := range entries {
+		want := fmt.Sprintf("file-%d", index)
+		if item.RelativePath != want || item.Size != int64(index) {
+			t.Fatalf("copy %d changed: %+v", index, item)
 		}
 	}
 }

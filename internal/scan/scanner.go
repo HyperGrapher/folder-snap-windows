@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,10 +32,27 @@ type Request struct {
 }
 
 type Scanner struct {
-	Now func() time.Time
+	Now     func() time.Time
+	Workers int
+}
+
+type directoryTask struct {
+	absolute    string
+	displayPath string
+	root        bool
+}
+
+type directoryResult struct {
+	entries     []model.SnapshotEntry
+	directories []directoryTask
+	warnings    []model.ScanWarning
+	err         error
 }
 
 func (s Scanner) Scan(ctx context.Context, req Request) (model.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return model.Snapshot{}, err
+	}
 	if s.Now == nil {
 		s.Now = time.Now
 	}
@@ -67,96 +85,166 @@ func (s Scanner) Scan(ctx context.Context, req Request) (model.Snapshot, error) 
 		},
 	}
 
+	entries, warnings, err := s.walkConcurrent(ctx, req.RootPath, matcher, req.Progress)
+	if err != nil {
+		return model.Snapshot{}, err
+	}
+	snapshot.Entries = entries
+	snapshot.Header.ScanWarnings = warnings
+	sort.Slice(snapshot.Header.ScanWarnings, func(i, j int) bool {
+		if snapshot.Header.ScanWarnings[i].Path != snapshot.Header.ScanWarnings[j].Path {
+			return snapshot.Header.ScanWarnings[i].Path < snapshot.Header.ScanWarnings[j].Path
+		}
+		return snapshot.Header.ScanWarnings[i].Operation < snapshot.Header.ScanWarnings[j].Operation
+	})
+	for _, item := range snapshot.Entries {
+		switch item.Type {
+		case model.EntryFile:
+			snapshot.Header.FileCount++
+			snapshot.Header.TotalFileBytes += item.Size
+		case model.EntryDirectory:
+			snapshot.Header.DirectoryCount++
+		default:
+			snapshot.Header.OtherCount++
+		}
+	}
+	sort.Slice(snapshot.Entries, func(i, j int) bool {
+		return snapshot.Entries[i].RelativePath < snapshot.Entries[j].RelativePath
+	})
+	snapshot.EntriesSorted = true
+	snapshot.Header.CompletedAtUTC = s.Now().UTC()
+	return snapshot, nil
+}
+
+func (s Scanner) walkConcurrent(ctx context.Context, root string, matcher *ignorepkg.Matcher, progress func(int64, string)) ([]model.SnapshotEntry, []model.ScanWarning, error) {
+	workers := s.Workers
+	if workers <= 0 {
+		workers = 4
+	}
+	if workers > 32 {
+		workers = 32
+	}
+	walkCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	tasks := make(chan directoryTask)
+	results := make(chan directoryResult, workers)
+	var workersDone sync.WaitGroup
+	workersDone.Add(workers)
+	for range workers {
+		go func() {
+			defer workersDone.Done()
+			for task := range tasks {
+				results <- scanDirectory(walkCtx, task, matcher)
+			}
+		}()
+	}
+
+	queue := []directoryTask{{absolute: root, root: true}}
+	inFlight := 0
+	var entries []model.SnapshotEntry
+	var warnings []model.ScanWarning
+	var firstErr error
 	var seen int64
-	err = filepath.WalkDir(req.RootPath, func(current string, entry fs.DirEntry, walkErr error) error {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+	for len(queue) > 0 || inFlight > 0 {
+		var taskOutput chan directoryTask
+		var next directoryTask
+		if firstErr == nil && len(queue) > 0 {
+			taskOutput = tasks
+			next = queue[0]
 		}
-		if current == req.RootPath {
-			if walkErr != nil {
-				return walkErr
+		select {
+		case taskOutput <- next:
+			queue = queue[1:]
+			inFlight++
+		case result := <-results:
+			inFlight--
+			if result.err != nil && firstErr == nil {
+				firstErr = result.err
+				queue = queue[:0]
+				cancel()
 			}
-			return nil
+			warnings = append(warnings, result.warnings...)
+			if firstErr == nil {
+				queue = append(queue, result.directories...)
+			}
+			for _, item := range result.entries {
+				entries = append(entries, item)
+				seen++
+				if progress != nil && (seen == 1 || seen%256 == 0) {
+					progress(seen, item.DisplayPath)
+				}
+			}
 		}
-		relative, relErr := filepath.Rel(req.RootPath, current)
-		if relErr != nil {
-			return relErr
-		}
-		displayPath := filepath.ToSlash(relative)
-		normalized, normalizeErr := pathutil.NormalizeRelative(displayPath)
-		if normalizeErr != nil {
-			return normalizeErr
-		}
+	}
+	close(tasks)
+	workersDone.Wait()
+	if firstErr != nil {
+		return nil, nil, firstErr
+	}
+	return entries, warnings, nil
+}
 
-		if walkErr != nil {
-			snapshot.Header.ScanWarnings = append(snapshot.Header.ScanWarnings, warning(normalized, "enumerate", walkErr))
-			if entry != nil && entry.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
+func scanDirectory(ctx context.Context, task directoryTask, matcher *ignorepkg.Matcher) directoryResult {
+	if err := ctx.Err(); err != nil {
+		return directoryResult{err: err}
+	}
+	children, err := os.ReadDir(task.absolute)
+	if err != nil {
+		if task.root {
+			return directoryResult{err: fmt.Errorf("enumerate root: %w", err)}
 		}
-
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			snapshot.Header.ScanWarnings = append(snapshot.Header.ScanWarnings, warning(normalized, "stat", infoErr))
-			if entry.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
+		normalized, _ := pathutil.NormalizeRelative(task.displayPath)
+		return directoryResult{warnings: []model.ScanWarning{warning(normalized, "enumerate", err)}}
+	}
+	result := directoryResult{
+		entries:     make([]model.SnapshotEntry, 0, len(children)),
+		directories: make([]directoryTask, 0),
+	}
+	for _, entry := range children {
+		if err := ctx.Err(); err != nil {
+			result.err = err
+			return result
+		}
+		displayPath := entry.Name()
+		if task.displayPath != "" {
+			displayPath = task.displayPath + "/" + entry.Name()
+		}
+		normalized, err := pathutil.NormalizeRelative(displayPath)
+		if err != nil {
+			result.err = err
+			return result
+		}
+		info, err := entry.Info()
+		if err != nil {
+			result.warnings = append(result.warnings, warning(normalized, "stat", err))
+			continue
 		}
 		attributes, created := windowsMetadata(info)
 		isReparse := attributes&fileAttributeReparsePoint != 0 || info.Mode()&os.ModeSymlink != 0
-		isDir := info.IsDir()
-		match := matcher.Match(normalized, isDir)
-		if match.Excluded {
-			if isDir && !isReparse && matcher.CanPrune(normalized) {
-				return fs.SkipDir
-			}
-			if !isDir || isReparse {
-				return nil
-			}
-		} else {
+		isDirectory := info.IsDir()
+		match := matcher.Match(normalized, isDirectory)
+		current := filepath.Join(task.absolute, entry.Name())
+		if !match.Excluded {
 			item := model.SnapshotEntry{
-				RelativePath:   normalized,
-				DisplayPath:    displayPath,
-				Type:           entryType(info, isReparse),
-				ModifiedUnixNs: info.ModTime().UTC().UnixNano(),
-				CreatedUnixNs:  created,
-				Attributes:     attributes,
+				RelativePath: normalized, DisplayPath: displayPath,
+				Type: entryType(info, isReparse), Size: info.Size(),
+				ModifiedUnixNs: info.ModTime().UTC().UnixNano(), CreatedUnixNs: created, Attributes: attributes,
 			}
-			if item.Type == model.EntryFile {
-				item.Size = info.Size()
-				snapshot.Header.FileCount++
-				snapshot.Header.TotalFileBytes += item.Size
-			} else if item.Type == model.EntryDirectory {
-				snapshot.Header.DirectoryCount++
-			} else {
-				snapshot.Header.OtherCount++
+			if item.Type != model.EntryFile {
+				item.Size = 0
 			}
 			if isReparse {
 				if target, readErr := os.Readlink(current); readErr == nil {
 					item.LinkTarget = target
 				}
 			}
-			snapshot.Entries = append(snapshot.Entries, item)
-			seen++
-			if req.Progress != nil && (seen == 1 || seen%256 == 0) {
-				req.Progress(seen, displayPath)
-			}
+			result.entries = append(result.entries, item)
 		}
-		if isReparse && isDir {
-			return fs.SkipDir
+		if isDirectory && !isReparse && (!match.Excluded || !matcher.CanPrune(normalized)) {
+			result.directories = append(result.directories, directoryTask{absolute: current, displayPath: displayPath})
 		}
-		return nil
-	})
-	if err != nil {
-		return model.Snapshot{}, err
 	}
-	sort.Slice(snapshot.Entries, func(i, j int) bool {
-		return snapshot.Entries[i].RelativePath < snapshot.Entries[j].RelativePath
-	})
-	snapshot.Header.CompletedAtUTC = s.Now().UTC()
-	return snapshot, nil
+	return result
 }
 
 func entryType(info fs.FileInfo, reparse bool) model.EntryType {

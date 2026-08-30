@@ -65,6 +65,7 @@ type Snapshot struct {
 	SchemaVersion int             `json:"schemaVersion"`
 	Header        SnapshotHeader  `json:"header"`
 	Entries       []SnapshotEntry `json:"entries"`
+	EntriesSorted bool            `json:"-"`
 }
 
 // SnapshotRecord is the lightweight, globally indexed history metadata. It

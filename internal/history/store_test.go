@@ -47,6 +47,9 @@ func TestGlobalIndexSaveLoadDescriptionAndPerRootRetention(t *testing.T) {
 	if len(loaded.Entries) != 1 || loaded.Header.RootID != "root-a" {
 		t.Fatalf("unexpected loaded snapshot: %+v", loaded)
 	}
+	if !loaded.EntriesSorted {
+		t.Fatal("loaded sorted snapshot was not marked as sorted")
+	}
 
 	index, err := store.LoadIndex()
 	if err != nil {

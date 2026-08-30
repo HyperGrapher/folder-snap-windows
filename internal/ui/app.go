@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"foldersnap/internal/app"
@@ -844,33 +845,42 @@ func (u *App) compareSelected() {
 	u.compareButton.Deactivate()
 	u.cleanupButton.Deactivate()
 	go func() {
-		before, err := u.service.LoadSnapshot(rootID, beforeID)
+		var before, after model.Snapshot
+		var beforeErr, afterErr error
+		var loads sync.WaitGroup
+		loads.Add(2)
+		go func() {
+			defer loads.Done()
+			before, beforeErr = u.service.LoadSnapshot(rootID, beforeID)
+		}()
+		go func() {
+			defer loads.Done()
+			after, afterErr = u.service.LoadSnapshot(rootID, afterID)
+		}()
+		loads.Wait()
+		err := errors.Join(beforeErr, afterErr)
 		if err == nil {
-			after, loadErr := u.service.LoadSnapshot(rootID, afterID)
-			err = loadErr
+			largeComparison := len(before.Entries)+len(after.Entries) >= 100_000
+			result, compareErr := u.service.Compare(before, after)
+			err = compareErr
 			if err == nil {
-				largeComparison := len(before.Entries)+len(after.Entries) >= 100_000
-				result, compareErr := u.service.Compare(before, after)
-				err = compareErr
-				if err == nil {
-					u.Dispatch(func() {
-						if u.selectedRootID == rootID && u.beforeID == beforeID && u.afterID == afterID && u.compareVersion == version {
-							u.beforeID, u.afterID, u.diff = result.BeforeID, result.AfterID, result
-							u.compareState = comparisonDone
-							u.renderDiff()
-							u.updateCompareButton()
-						}
-					})
-					if largeComparison {
-						// The result owns compact copies of changed entries, so the
-						// decoded full snapshots can be returned to Windows now.
-						before = model.Snapshot{}
-						after = model.Snapshot{}
-						runtime.GC()
-						debug.FreeOSMemory()
+				u.Dispatch(func() {
+					if u.selectedRootID == rootID && u.beforeID == beforeID && u.afterID == afterID && u.compareVersion == version {
+						u.beforeID, u.afterID, u.diff = result.BeforeID, result.AfterID, result
+						u.compareState = comparisonDone
+						u.renderDiff()
+						u.updateCompareButton()
 					}
-					return
+				})
+				if largeComparison {
+					// The result owns compact copies of changed entries, so the
+					// decoded full snapshots can be returned to Windows now.
+					before = model.Snapshot{}
+					after = model.Snapshot{}
+					runtime.GC()
+					debug.FreeOSMemory()
 				}
+				return
 			}
 		}
 		u.Dispatch(func() {
