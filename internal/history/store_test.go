@@ -1,6 +1,7 @@
 package history
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -256,6 +257,18 @@ func TestLoadReportsMissingSnapshotPayload(t *testing.T) {
 	store := Store{DataDir: t.TempDir()}
 	if _, err := store.Load("missing"); !errors.Is(err, ErrSnapshotPayloadMissing) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadContextHonorsCancellation(t *testing.T) {
+	store := Store{DataDir: t.TempDir()}
+	if _, err := store.Save(sampleSnapshot("root", "snapshot", time.Now().UTC()), 50); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.LoadContext(ctx, "snapshot"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
 

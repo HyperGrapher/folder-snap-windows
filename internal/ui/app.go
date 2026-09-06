@@ -76,6 +76,8 @@ type App struct {
 	beforeID           string
 	afterID            string
 	compareVersion     uint64
+	compareCancel      context.CancelFunc
+	compareSlots       chan struct{}
 	compareState       comparisonState
 	diff               model.DiffResult
 	filter             model.ChangeType
@@ -118,7 +120,7 @@ func New(service *app.Service, background bool) *App {
 	fltk.InitStyles()
 	fltk.SetScheme("gtk+")
 	applyTheme()
-	u := &App{service: service, background: background, actions: newActionQueue(16)}
+	u := &App{service: service, background: background, actions: newActionQueue(16), compareSlots: make(chan struct{}, 1)}
 	u.build()
 	u.bindEvents()
 	u.refreshRoots()
@@ -166,6 +168,7 @@ func (u *App) Hide()              { u.window.Hide() }
 func (u *App) RawHandle() uintptr { return u.window.RawHandle() }
 func (u *App) Quit() {
 	u.quitting = true
+	u.cancelComparison()
 	u.service.Close()
 	u.window.Hide()
 	fltk.AwakeNullMessage()
@@ -688,7 +691,12 @@ func (u *App) loadTimeline() {
 	}
 	u.timeline = append([]model.SnapshotRecord(nil), records...)
 	u.historyFolderMeta.SetLabel(fmt.Sprintf("%d snapshot%s  ·  newest first", len(records), pluralSuffix(len(records))))
+	previousPair := u.currentPair()
 	u.applyPair(u.currentPair().reconcile(u.timeline))
+	if u.compareState == comparisonLoading && u.currentPair() != previousPair {
+		u.cancelComparison()
+		u.compareState = comparisonIdle
+	}
 	if _, ok := u.snapshotRecord(u.selectedSnapshotID); !ok {
 		u.selectedSnapshotID = ""
 	}
@@ -833,6 +841,9 @@ func (u *App) compareSelected() {
 		return
 	}
 	rootID, beforeID, afterID := u.selectedRootID, u.beforeID, u.afterID
+	u.cancelComparison()
+	ctx, cancel := context.WithCancel(context.Background())
+	u.compareCancel = cancel
 	u.compareVersion++
 	version := u.compareVersion
 	u.compareState = comparisonLoading
@@ -845,27 +856,40 @@ func (u *App) compareSelected() {
 	u.compareButton.Deactivate()
 	u.cleanupButton.Deactivate()
 	go func() {
+		defer cancel()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				u.dispatchComparisonError(ctx, rootID, beforeID, afterID, version, fmt.Errorf("comparison worker panic: %v", recovered))
+			}
+		}()
+		select {
+		case u.compareSlots <- struct{}{}:
+			defer func() { <-u.compareSlots }()
+		case <-ctx.Done():
+			return
+		}
 		var before, after model.Snapshot
 		var beforeErr, afterErr error
 		var loads sync.WaitGroup
 		loads.Add(2)
 		go func() {
 			defer loads.Done()
-			before, beforeErr = u.service.LoadSnapshot(rootID, beforeID)
+			before, beforeErr = u.loadSnapshotSafely(ctx, rootID, beforeID)
 		}()
 		go func() {
 			defer loads.Done()
-			after, afterErr = u.service.LoadSnapshot(rootID, afterID)
+			after, afterErr = u.loadSnapshotSafely(ctx, rootID, afterID)
 		}()
 		loads.Wait()
 		err := errors.Join(beforeErr, afterErr)
 		if err == nil {
 			largeComparison := len(before.Entries)+len(after.Entries) >= 100_000
-			result, compareErr := u.service.Compare(before, after)
+			result, compareErr := u.service.CompareContext(ctx, before, after)
 			err = compareErr
 			if err == nil {
 				u.Dispatch(func() {
 					if u.selectedRootID == rootID && u.beforeID == beforeID && u.afterID == afterID && u.compareVersion == version {
+						u.compareCancel = nil
 						u.beforeID, u.afterID, u.diff = result.BeforeID, result.AfterID, result
 						u.compareState = comparisonDone
 						u.renderDiff()
@@ -883,13 +907,37 @@ func (u *App) compareSelected() {
 				return
 			}
 		}
-		u.Dispatch(func() {
-			if u.selectedRootID == rootID && u.beforeID == beforeID && u.afterID == afterID && u.compareVersion == version {
-				u.showComparisonError("Comparison failed: " + err.Error())
-				u.updateCompareButton()
-			}
-		})
+		u.dispatchComparisonError(ctx, rootID, beforeID, afterID, version, err)
 	}()
+}
+
+func (u *App) loadSnapshotSafely(ctx context.Context, rootID, snapshotID string) (snapshot model.Snapshot, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("load snapshot panic: %v", recovered)
+		}
+	}()
+	return u.service.LoadSnapshotContext(ctx, rootID, snapshotID)
+}
+
+func (u *App) dispatchComparisonError(ctx context.Context, rootID, beforeID, afterID string, version uint64, err error) {
+	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		return
+	}
+	u.Dispatch(func() {
+		if u.selectedRootID == rootID && u.beforeID == beforeID && u.afterID == afterID && u.compareVersion == version {
+			u.compareCancel = nil
+			u.showComparisonError("Comparison failed: " + err.Error())
+			u.updateCompareButton()
+		}
+	})
+}
+
+func (u *App) cancelComparison() {
+	if u.compareCancel != nil {
+		u.compareCancel()
+		u.compareCancel = nil
+	}
 }
 
 func (u *App) renderDiff() {
@@ -981,6 +1029,7 @@ func (u *App) comparisonTitle() string {
 }
 
 func (u *App) showIdleComparison(message string) {
+	u.cancelComparison()
 	u.compareVersion++
 	u.compareState = comparisonIdle
 	u.diff = model.DiffResult{}
@@ -996,6 +1045,7 @@ func (u *App) showIdleComparison(message string) {
 }
 
 func (u *App) showComparisonError(message string) {
+	u.cancelComparison()
 	u.compareVersion++
 	u.compareState = comparisonError
 	u.diff = model.DiffResult{}

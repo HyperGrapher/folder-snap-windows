@@ -2,6 +2,7 @@ package history
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -159,12 +160,23 @@ func (s *Store) Save(snapshot model.Snapshot, retention int) (model.SnapshotReco
 }
 
 func (s *Store) Load(snapshotID string) (model.Snapshot, error) {
+	return s.LoadContext(context.Background(), snapshotID)
+}
+
+func (s *Store) LoadContext(ctx context.Context, snapshotID string) (model.Snapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.load(snapshotID)
+	return s.loadContext(ctx, snapshotID)
 }
 
 func (s *Store) load(snapshotID string) (model.Snapshot, error) {
+	return s.loadContext(context.Background(), snapshotID)
+}
+
+func (s *Store) loadContext(ctx context.Context, snapshotID string) (model.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return model.Snapshot{}, err
+	}
 	if err := pathutil.ValidateStorageID(snapshotID); err != nil {
 		return model.Snapshot{}, err
 	}
@@ -176,7 +188,7 @@ func (s *Store) load(snapshotID string) (model.Snapshot, error) {
 		return model.Snapshot{}, err
 	}
 	defer file.Close()
-	compressed, err := gzip.NewReader(file)
+	compressed, err := gzip.NewReader(contextReader{ctx: ctx, reader: file})
 	if err != nil {
 		return model.Snapshot{}, fmt.Errorf("open snapshot payload: %w", err)
 	}
@@ -192,12 +204,24 @@ func (s *Store) load(snapshotID string) (model.Snapshot, error) {
 	if err := pathutil.ValidateStorageID(snapshot.Header.RootID); err != nil {
 		return model.Snapshot{}, err
 	}
-	entriesSorted, err := validateAndCheckEntryPaths(snapshot.Entries)
+	entriesSorted, err := validateAndCheckEntryPathsContext(ctx, snapshot.Entries)
 	if err != nil {
 		return model.Snapshot{}, err
 	}
 	snapshot.EntriesSorted = entriesSorted
 	return snapshot, nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(buffer []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(buffer)
 }
 
 func (s *Store) UpdateDescription(rootID, snapshotID, description string) error {
@@ -582,8 +606,17 @@ func validateEntryPaths(entries []model.SnapshotEntry) error {
 }
 
 func validateAndCheckEntryPaths(entries []model.SnapshotEntry) (bool, error) {
+	return validateAndCheckEntryPathsContext(context.Background(), entries)
+}
+
+func validateAndCheckEntryPathsContext(ctx context.Context, entries []model.SnapshotEntry) (bool, error) {
 	sorted := true
 	for index, entry := range entries {
+		if index&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+		}
 		normalized, err := pathutil.NormalizeRelative(entry.RelativePath)
 		if err != nil || normalized == "" || normalized != entry.RelativePath {
 			return false, fmt.Errorf("snapshot contains unsafe entry path %q", entry.RelativePath)

@@ -1,7 +1,9 @@
 package diff
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +17,13 @@ import (
 type Engine struct{}
 
 func (Engine) Compare(before, after model.Snapshot) (model.DiffResult, error) {
+	return (Engine{}).CompareContext(context.Background(), before, after)
+}
+
+func (Engine) CompareContext(ctx context.Context, before, after model.Snapshot) (model.DiffResult, error) {
+	if err := ctx.Err(); err != nil {
+		return model.DiffResult{}, err
+	}
 	if before.Header.RootID == "" || before.Header.RootID != after.Header.RootID {
 		return model.DiffResult{}, errors.New("snapshots must belong to the same root")
 	}
@@ -45,6 +54,11 @@ func (Engine) Compare(before, after model.Snapshot) (model.DiffResult, error) {
 	var copies entryArena
 	var changes diffEntryBuilder
 	for i, j := 0, 0; i < len(left) || j < len(right); {
+		if (i+j)&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return model.DiffResult{}, err
+			}
+		}
 		var entry model.DiffEntry
 		switch {
 		case i >= len(left):
@@ -74,7 +88,9 @@ func (Engine) Compare(before, after model.Snapshot) (model.DiffResult, error) {
 		changes.append(entry)
 	}
 	result.Entries = changes.finish()
-	orderDiffEntries(result.Entries)
+	if err := orderDiffEntriesContext(ctx, result.Entries); err != nil {
+		return model.DiffResult{}, err
+	}
 	result.Summary.NetBytes = after.Header.TotalFileBytes - before.Header.TotalFileBytes
 	return result, nil
 }
@@ -132,11 +148,19 @@ func compareEntries(before, after model.SnapshotEntry) (model.ChangeType, string
 	return model.ChangeUnchanged, ""
 }
 
-func orderDiffEntries(entries []model.DiffEntry) {
+func orderDiffEntriesContext(ctx context.Context, entries []model.DiffEntry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	addedEnd := partitionChange(entries, 0, model.ChangeAdded)
 	removedEnd := partitionChange(entries, addedEnd, model.ChangeRemoved)
 	ranges := [][2]int{{0, addedEnd}, {addedEnd, removedEnd}, {removedEnd, len(entries)}}
-	sortRange := func(bounds [2]int) {
+	sortRange := func(bounds [2]int) (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("sort comparison results panic: %v", recovered)
+			}
+		}()
 		items := entries[bounds[0]:bounds[1]]
 		sort.Slice(items, func(i, j int) bool {
 			left, right := items[i].DisplayPath, items[j].DisplayPath
@@ -145,6 +169,7 @@ func orderDiffEntries(entries []model.DiffEntry) {
 			}
 			return left < right
 		})
+		return ctx.Err()
 	}
 	parallel := len(entries) >= 10_000
 	if parallel {
@@ -158,11 +183,14 @@ func orderDiffEntries(entries []model.DiffEntry) {
 	}
 	if !parallel {
 		for _, bounds := range ranges {
-			sortRange(bounds)
+			if err := sortRange(bounds); err != nil {
+				return err
+			}
 		}
-		return
+		return nil
 	}
 	var wait sync.WaitGroup
+	errorsFound := make(chan error, len(ranges))
 	for _, bounds := range ranges {
 		if bounds[1]-bounds[0] <= 1 {
 			continue
@@ -170,10 +198,19 @@ func orderDiffEntries(entries []model.DiffEntry) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			sortRange(bounds)
+			if err := sortRange(bounds); err != nil {
+				errorsFound <- err
+			}
 		}()
 	}
 	wait.Wait()
+	close(errorsFound)
+	for err := range errorsFound {
+		if err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }
 
 func partitionChange(entries []model.DiffEntry, start int, change model.ChangeType) int {

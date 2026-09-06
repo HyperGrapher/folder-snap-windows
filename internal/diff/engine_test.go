@@ -1,6 +1,8 @@
 package diff
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -39,6 +41,28 @@ func TestCompareCoreCases(t *testing.T) {
 		if item.Path == "type" && item.Subtype != "type_changed" {
 			t.Fatal("missing type change subtype")
 		}
+	}
+}
+
+func TestCompareContextHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := (Engine{}).CompareContext(ctx, snapshot("before", 1, nil), snapshot("after", 2, nil))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestCompareContextStopsDuringMerge(t *testing.T) {
+	const count = 5_000
+	entries := make([]model.SnapshotEntry, count)
+	for index := range count {
+		entries[index] = entry(fmt.Sprintf("file-%06d", index), model.EntryFile, 1, 1)
+	}
+	ctx := &cancelAfterChecksContext{remaining: 2}
+	_, err := (Engine{}).CompareContext(ctx, snapshot("before", 1, entries), snapshot("after", 2, entries))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
 
@@ -165,7 +189,9 @@ func TestLargeDiffOrderingGroupsAndSortsConcurrently(t *testing.T) {
 		path := fmt.Sprintf("folder/file%d.txt", count-index)
 		entries[index] = model.DiffEntry{Path: path, DisplayPath: path, Change: changes[index%len(changes)]}
 	}
-	orderDiffEntries(entries)
+	if err := orderDiffEntriesContext(context.Background(), entries); err != nil {
+		t.Fatal(err)
+	}
 	rank := func(change model.ChangeType) int {
 		switch change {
 		case model.ChangeAdded:
@@ -215,4 +241,19 @@ func snapshot(id string, second int64, entries []model.SnapshotEntry) model.Snap
 
 func entry(path string, typ model.EntryType, size, modified int64) model.SnapshotEntry {
 	return model.SnapshotEntry{RelativePath: path, DisplayPath: path, Type: typ, Size: size, ModifiedUnixNs: modified}
+}
+
+type cancelAfterChecksContext struct {
+	remaining int
+}
+
+func (c *cancelAfterChecksContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *cancelAfterChecksContext) Done() <-chan struct{}       { return nil }
+func (c *cancelAfterChecksContext) Value(any) any               { return nil }
+func (c *cancelAfterChecksContext) Err() error {
+	if c.remaining == 0 {
+		return context.Canceled
+	}
+	c.remaining--
+	return nil
 }

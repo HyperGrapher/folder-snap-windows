@@ -246,7 +246,10 @@ func (s *Service) ListSnapshots(rootID string) ([]model.SnapshotRecord, error) {
 	return s.history.List(rootID)
 }
 func (s *Service) LoadSnapshot(rootID, snapshotID string) (model.Snapshot, error) {
-	snapshot, err := s.history.Load(snapshotID)
+	return s.LoadSnapshotContext(context.Background(), rootID, snapshotID)
+}
+func (s *Service) LoadSnapshotContext(ctx context.Context, rootID, snapshotID string) (model.Snapshot, error) {
+	snapshot, err := s.history.LoadContext(ctx, snapshotID)
 	if err != nil {
 		return model.Snapshot{}, err
 	}
@@ -262,7 +265,10 @@ func (s *Service) DeleteSnapshot(rootID, snapshotID string) error {
 	return s.history.Delete(rootID, snapshotID)
 }
 func (s *Service) Compare(before, after model.Snapshot) (model.DiffResult, error) {
-	return (diffpkg.Engine{}).Compare(before, after)
+	return s.CompareContext(context.Background(), before, after)
+}
+func (s *Service) CompareContext(ctx context.Context, before, after model.Snapshot) (model.DiffResult, error) {
+	return (diffpkg.Engine{}).CompareContext(ctx, before, after)
 }
 
 func (s *Service) RequestSnapshot(rootID string, trigger model.SnapshotTrigger) error {

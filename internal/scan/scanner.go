@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 )
 
 const fileAttributeReparsePoint = 0x400
+const directoryBatchSize = 256
 
 type Request struct {
 	RootID       string
@@ -47,6 +49,7 @@ type directoryResult struct {
 	directories []directoryTask
 	warnings    []model.ScanWarning
 	err         error
+	complete    bool
 }
 
 func (s Scanner) Scan(ctx context.Context, req Request) (model.Snapshot, error) {
@@ -89,6 +92,9 @@ func (s Scanner) Scan(ctx context.Context, req Request) (model.Snapshot, error) 
 	if err != nil {
 		return model.Snapshot{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return model.Snapshot{}, err
+	}
 	snapshot.Entries = entries
 	snapshot.Header.ScanWarnings = warnings
 	sort.Slice(snapshot.Header.ScanWarnings, func(i, j int) bool {
@@ -111,6 +117,9 @@ func (s Scanner) Scan(ctx context.Context, req Request) (model.Snapshot, error) 
 	sort.Slice(snapshot.Entries, func(i, j int) bool {
 		return snapshot.Entries[i].RelativePath < snapshot.Entries[j].RelativePath
 	})
+	if err := ctx.Err(); err != nil {
+		return model.Snapshot{}, err
+	}
 	snapshot.EntriesSorted = true
 	snapshot.Header.CompletedAtUTC = s.Now().UTC()
 	return snapshot, nil
@@ -134,7 +143,7 @@ func (s Scanner) walkConcurrent(ctx context.Context, root string, matcher *ignor
 		go func() {
 			defer workersDone.Done()
 			for task := range tasks {
-				results <- scanDirectory(walkCtx, task, matcher)
+				scanDirectoryTask(walkCtx, task, matcher, results)
 			}
 		}()
 	}
@@ -145,6 +154,7 @@ func (s Scanner) walkConcurrent(ctx context.Context, root string, matcher *ignor
 	var warnings []model.ScanWarning
 	var firstErr error
 	var seen int64
+	cancellation := walkCtx.Done()
 	for len(queue) > 0 || inFlight > 0 {
 		var taskOutput chan directoryTask
 		var next directoryTask
@@ -153,11 +163,19 @@ func (s Scanner) walkConcurrent(ctx context.Context, root string, matcher *ignor
 			next = queue[0]
 		}
 		select {
+		case <-cancellation:
+			if firstErr == nil {
+				firstErr = walkCtx.Err()
+				queue = queue[:0]
+			}
+			cancellation = nil
 		case taskOutput <- next:
 			queue = queue[1:]
 			inFlight++
 		case result := <-results:
-			inFlight--
+			if result.complete {
+				inFlight--
+			}
 			if result.err != nil && firstErr == nil {
 				firstErr = result.err
 				queue = queue[:0]
@@ -168,10 +186,21 @@ func (s Scanner) walkConcurrent(ctx context.Context, root string, matcher *ignor
 				queue = append(queue, result.directories...)
 			}
 			for _, item := range result.entries {
+				if err := walkCtx.Err(); err != nil {
+					if firstErr == nil {
+						firstErr = err
+						queue = queue[:0]
+					}
+					break
+				}
 				entries = append(entries, item)
 				seen++
 				if progress != nil && (seen == 1 || seen%256 == 0) {
-					progress(seen, item.DisplayPath)
+					if err := callProgress(progress, seen, item.DisplayPath); err != nil && firstErr == nil {
+						firstErr = err
+						queue = queue[:0]
+						cancel()
+					}
 				}
 			}
 		}
@@ -181,70 +210,118 @@ func (s Scanner) walkConcurrent(ctx context.Context, root string, matcher *ignor
 	if firstErr != nil {
 		return nil, nil, firstErr
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	return entries, warnings, nil
 }
 
-func scanDirectory(ctx context.Context, task directoryTask, matcher *ignorepkg.Matcher) directoryResult {
+func scanDirectoryTask(ctx context.Context, task directoryTask, matcher *ignorepkg.Matcher, results chan<- directoryResult) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			results <- directoryResult{err: fmt.Errorf("scan directory %q panic: %v", task.displayPath, recovered), complete: true}
+		}
+	}()
+	err := scanDirectory(ctx, task, matcher, func(result directoryResult) bool {
+		select {
+		case results <- result:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	})
+	results <- directoryResult{err: err, complete: true}
+}
+
+func scanDirectory(ctx context.Context, task directoryTask, matcher *ignorepkg.Matcher, emit func(directoryResult) bool) error {
 	if err := ctx.Err(); err != nil {
-		return directoryResult{err: err}
+		return err
 	}
-	children, err := os.ReadDir(task.absolute)
+	directory, err := os.Open(task.absolute)
 	if err != nil {
 		if task.root {
-			return directoryResult{err: fmt.Errorf("enumerate root: %w", err)}
+			return fmt.Errorf("enumerate root: %w", err)
 		}
 		normalized, _ := pathutil.NormalizeRelative(task.displayPath)
-		return directoryResult{warnings: []model.ScanWarning{warning(normalized, "enumerate", err)}}
+		emit(directoryResult{warnings: []model.ScanWarning{warning(normalized, "enumerate", err)}})
+		return nil
 	}
-	result := directoryResult{
-		entries:     make([]model.SnapshotEntry, 0, len(children)),
-		directories: make([]directoryTask, 0),
-	}
-	for _, entry := range children {
-		if err := ctx.Err(); err != nil {
-			result.err = err
-			return result
+	defer directory.Close()
+	for {
+		children, readErr := directory.ReadDir(directoryBatchSize)
+		result := directoryResult{
+			entries:     make([]model.SnapshotEntry, 0, len(children)),
+			directories: make([]directoryTask, 0),
 		}
-		displayPath := entry.Name()
-		if task.displayPath != "" {
-			displayPath = task.displayPath + "/" + entry.Name()
-		}
-		normalized, err := pathutil.NormalizeRelative(displayPath)
-		if err != nil {
-			result.err = err
-			return result
-		}
-		info, err := entry.Info()
-		if err != nil {
-			result.warnings = append(result.warnings, warning(normalized, "stat", err))
-			continue
-		}
-		attributes, created := windowsMetadata(info)
-		isReparse := attributes&fileAttributeReparsePoint != 0 || info.Mode()&os.ModeSymlink != 0
-		isDirectory := info.IsDir()
-		match := matcher.Match(normalized, isDirectory)
-		current := filepath.Join(task.absolute, entry.Name())
-		if !match.Excluded {
-			item := model.SnapshotEntry{
-				RelativePath: normalized, DisplayPath: displayPath,
-				Type: entryType(info, isReparse), Size: info.Size(),
-				ModifiedUnixNs: info.ModTime().UTC().UnixNano(), CreatedUnixNs: created, Attributes: attributes,
+		for _, entry := range children {
+			if err := ctx.Err(); err != nil {
+				return err
 			}
-			if item.Type != model.EntryFile {
-				item.Size = 0
+			displayPath := entry.Name()
+			if task.displayPath != "" {
+				displayPath = task.displayPath + "/" + entry.Name()
 			}
-			if isReparse {
-				if target, readErr := os.Readlink(current); readErr == nil {
-					item.LinkTarget = target
+			normalized, err := pathutil.NormalizeRelative(displayPath)
+			if err != nil {
+				return err
+			}
+			info, err := entry.Info()
+			if err != nil {
+				result.warnings = append(result.warnings, warning(normalized, "stat", err))
+				continue
+			}
+			attributes, created := windowsMetadata(info)
+			isReparse := attributes&fileAttributeReparsePoint != 0 || info.Mode()&os.ModeSymlink != 0
+			isDirectory := info.IsDir()
+			match := matcher.Match(normalized, isDirectory)
+			current := filepath.Join(task.absolute, entry.Name())
+			if !match.Excluded {
+				item := model.SnapshotEntry{
+					RelativePath: normalized, DisplayPath: displayPath,
+					Type: entryType(info, isReparse), Size: info.Size(),
+					ModifiedUnixNs: info.ModTime().UTC().UnixNano(), CreatedUnixNs: created, Attributes: attributes,
 				}
+				if item.Type != model.EntryFile {
+					item.Size = 0
+				}
+				if isReparse {
+					if target, linkErr := os.Readlink(current); linkErr == nil {
+						item.LinkTarget = target
+					}
+				}
+				result.entries = append(result.entries, item)
 			}
-			result.entries = append(result.entries, item)
+			if isDirectory && !isReparse && (!match.Excluded || !matcher.CanPrune(normalized)) {
+				result.directories = append(result.directories, directoryTask{absolute: current, displayPath: displayPath})
+			}
 		}
-		if isDirectory && !isReparse && (!match.Excluded || !matcher.CanPrune(normalized)) {
-			result.directories = append(result.directories, directoryTask{absolute: current, displayPath: displayPath})
+		if len(result.entries) > 0 || len(result.directories) > 0 || len(result.warnings) > 0 {
+			if !emit(result) {
+				return ctx.Err()
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return nil
+		}
+		if readErr != nil {
+			if task.root {
+				return fmt.Errorf("enumerate root: %w", readErr)
+			}
+			normalized, _ := pathutil.NormalizeRelative(task.displayPath)
+			emit(directoryResult{warnings: []model.ScanWarning{warning(normalized, "enumerate", readErr)}})
+			return nil
 		}
 	}
-	return result
+}
+
+func callProgress(progress func(int64, string), items int64, path string) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("scan progress callback panic: %v", recovered)
+		}
+	}()
+	progress(items, path)
+	return nil
 }
 
 func entryType(info fs.FileInfo, reparse bool) model.EntryType {

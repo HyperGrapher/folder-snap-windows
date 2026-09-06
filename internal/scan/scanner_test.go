@@ -2,6 +2,7 @@ package scan
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -92,6 +93,33 @@ func TestScanHonorsCancelledContext(t *testing.T) {
 	}
 }
 
+func TestScanHonorsCancellationDuringProgress(t *testing.T) {
+	root := t.TempDir()
+	for index := range 3 {
+		mustWrite(t, filepath.Join(root, "file-"+strconv.Itoa(index)), "contents")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := (Scanner{}).Scan(ctx, Request{
+		RootID: "root", RootPath: root,
+		Progress: func(int64, string) { cancel() },
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestDirectoryWorkerConvertsPanicToError(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "file.txt"), "contents")
+	results := make(chan directoryResult, 2)
+	scanDirectoryTask(context.Background(), directoryTask{absolute: root, root: true}, nil, results)
+	result := <-results
+	if !result.complete || result.err == nil {
+		t.Fatalf("worker result = %+v, want completed panic error", result)
+	}
+}
+
 func BenchmarkScanTree(b *testing.B) {
 	root := b.TempDir()
 	for directory := range 32 {
@@ -100,6 +128,26 @@ func BenchmarkScanTree(b *testing.B) {
 		for file := range 64 {
 			mustWrite(b, filepath.Join(dir, "file-"+strconv.Itoa(file)+".txt"), "contents")
 		}
+	}
+	request := Request{RootID: "root", RootPath: root}
+	for _, workers := range []int{1, 4} {
+		b.Run("workers-"+strconv.Itoa(workers), func(b *testing.B) {
+			scanner := Scanner{Workers: workers}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if _, err := scanner.Scan(context.Background(), request); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkScanFlatDirectory(b *testing.B) {
+	root := b.TempDir()
+	for file := range 2_048 {
+		mustWrite(b, filepath.Join(root, "file-"+strconv.Itoa(file)+".txt"), "contents")
 	}
 	request := Request{RootID: "root", RootPath: root}
 	for _, workers := range []int{1, 4} {
