@@ -63,3 +63,4 @@ The scanner continues to persist flat, sorted relative-path entries because that
 
 - HTML/CSV/text export
 - hashing, content backup, restore, and rename detection
+

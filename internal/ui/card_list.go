@@ -79,6 +79,8 @@ type changeCardStyle struct {
 	Path, Detail, Status string
 	Change               string
 	Directory            bool
+	Indent               int
+	CanExpand, Expanded  bool
 }
 
 func drawChangeCard(button *fltk.Button, card changeCardStyle) {
@@ -95,20 +97,37 @@ func drawChangeCard(button *fltk.Button, card changeCardStyle) {
 	drawRoundedFill(x, y, width, height, radiusSmall, background)
 	fltk.DrawRectfWithColor(x, y+1, 4, height-2, accent)
 
+	indentX := x + 15 + card.Indent*18
+	if card.CanExpand {
+		fltk.SetDrawColor(colorSecondary)
+		chevron := "›"
+		if card.Expanded {
+			chevron = "⌄"
+		}
+		fltk.SetDrawFont(fltk.HELVETICA_BOLD, 14)
+		fltk.Draw(chevron, indentX, y, 14, height, fltk.ALIGN_CENTER|fltk.ALIGN_INSIDE)
+	}
+	iconX := indentX
+	if card.CanExpand {
+		iconX += 15
+	}
 	if card.Directory {
-		fltk.DrawRectfWithColor(x+15, y+20, 17, 12, colorFolderIcon)
-		fltk.DrawRectfWithColor(x+17, y+17, 8, 4, colorFolderIcon)
+		fltk.DrawRectfWithColor(iconX, y+20, 17, 12, colorFolderIcon)
+		fltk.DrawRectfWithColor(iconX+2, y+17, 8, 4, colorFolderIcon)
 	} else {
-		fltk.DrawRectfWithColor(x+17, y+13, 14, 19, colorSecondary)
-		fltk.DrawRectfWithColor(x+20, y+18, 8, 2, background)
-		fltk.DrawRectfWithColor(x+20, y+23, 8, 2, background)
+		fltk.DrawRectfWithColor(iconX+2, y+13, 14, 19, colorSecondary)
+		fltk.DrawRectfWithColor(iconX+5, y+18, 8, 2, background)
+		fltk.DrawRectfWithColor(iconX+5, y+23, 8, 2, background)
 	}
 
-	statusX, statusWidth := x+43, 72
-	drawRoundedFill(statusX, y+12, statusWidth, 22, 8, colorRaised)
-	fltk.SetDrawColor(accent)
-	fltk.SetDrawFont(fltk.HELVETICA_BOLD, 9)
-	fltk.Draw(card.Status, statusX, y+12, statusWidth, 22, fltk.ALIGN_CENTER|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+	statusX, statusWidth := x+43+card.Indent*18, 0
+	if card.Status != "" {
+		statusWidth = 72
+		drawRoundedFill(statusX, y+12, statusWidth, 22, 8, colorRaised)
+		fltk.SetDrawColor(accent)
+		fltk.SetDrawFont(fltk.HELVETICA_BOLD, 9)
+		fltk.Draw(card.Status, statusX, y+12, statusWidth, 22, fltk.ALIGN_CENTER|fltk.ALIGN_INSIDE|fltk.ALIGN_CLIP)
+	}
 	detailWidth := 142
 	pathX := statusX + statusWidth + space3
 	textWidth := width - (pathX - x) - detailWidth - space4

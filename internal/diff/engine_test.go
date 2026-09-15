@@ -162,6 +162,28 @@ func TestFileAttributesAloneDoNotProduceModifiedNoise(t *testing.T) {
 	}
 }
 
+func TestComparisonFolderSizesIncludeUnchangedDescendants(t *testing.T) {
+	before := snapshot("before", 1, []model.SnapshotEntry{
+		entry("docs", model.EntryDirectory, 0, 1),
+		entry("docs/changed.bin", model.EntryFile, 20, 1),
+		entry("docs/unchanged.bin", model.EntryFile, 10, 1),
+	})
+	after := snapshot("after", 2, []model.SnapshotEntry{
+		entry("docs", model.EntryDirectory, 0, 1),
+		entry("docs/added.bin", model.EntryFile, 40, 1),
+		entry("docs/changed.bin", model.EntryFile, 30, 2),
+		entry("docs/unchanged.bin", model.EntryFile, 10, 1),
+	})
+	result, err := (Engine{}).Compare(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size, ok := result.FolderSizes["docs"]
+	if !ok || !size.BeforePresent || !size.AfterPresent || size.BeforeBytes != 30 || size.AfterBytes != 80 {
+		t.Fatalf("docs folder size = %+v, present=%v", size, ok)
+	}
+}
+
 func TestChangesUseMacOSGroupAndNaturalPathOrder(t *testing.T) {
 	before := snapshot("before", 1, []model.SnapshotEntry{entry("removed.txt", model.EntryFile, 1, 1)})
 	after := snapshot("after", 2, []model.SnapshotEntry{

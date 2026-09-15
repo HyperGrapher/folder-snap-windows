@@ -82,6 +82,7 @@ type App struct {
 	diff               model.DiffResult
 	filter             model.ChangeType
 	diffPage           int
+	diffExpanded       map[string]bool
 	background         bool
 	quitting           bool
 	notify             func(string, string)
@@ -120,7 +121,7 @@ func New(service *app.Service, background bool) *App {
 	fltk.InitStyles()
 	fltk.SetScheme("gtk+")
 	applyTheme()
-	u := &App{service: service, background: background, actions: newActionQueue(16), compareSlots: make(chan struct{}, 1)}
+	u := &App{service: service, background: background, actions: newActionQueue(16), compareSlots: make(chan struct{}, 1), diffExpanded: make(map[string]bool)}
 	u.build()
 	u.bindEvents()
 	u.refreshRoots()
@@ -391,19 +392,14 @@ func (u *App) build() {
 	u.search.SetCallbackCondition(fltk.WhenChanged)
 	u.search.SetCallback(func() {
 		if u.compareState == comparisonDone {
-			u.diffPage = 0
 			u.renderDiff()
 		}
 	})
 	u.previousPage.SetCallback(func() {
-		if u.diffPage > 0 {
-			u.diffPage--
-			u.renderDiff()
-		}
+		// Tree rows are expanded in place rather than split across pages.
 	})
 	u.nextPage.SetCallback(func() {
-		u.diffPage++
-		u.renderDiff()
+		// Tree rows are expanded in place rather than split across pages.
 	})
 	u.window.SetCallback(func() {
 		if u.service.Config().CloseToTray {
@@ -848,6 +844,7 @@ func (u *App) compareSelected() {
 	version := u.compareVersion
 	u.compareState = comparisonLoading
 	u.diffPage = 0
+	u.diffExpanded = make(map[string]bool)
 	u.diff = model.DiffResult{}
 	u.summary.SetLabel("Loading snapshots and comparing files...")
 	u.setMetricPlaceholders()
@@ -965,31 +962,87 @@ func (u *App) renderDiff() {
 	u.renderFilterState()
 	query := strings.TrimSpace(u.search.Value())
 	u.changesCards.clear()
-	page := makeDiffViewPage(u.diff.Entries, u.filter, query, u.diffPage, resultPageSize)
-	u.diffPage = page.Page
-	for _, item := range page.Entries {
-		marker := map[model.ChangeType]string{model.ChangeAdded: "ADDED", model.ChangeRemoved: "REMOVED", model.ChangeModified: "MODIFIED"}[item.Change]
-		entry := item.After
-		if entry == nil {
-			entry = item.Before
+	tree := makeDiffTreeView(u.diff.Entries, u.diff.FolderSizes, u.filter, query, u.diffExpanded)
+	for _, row := range tree.Rows {
+		item := row.Entry
+		marker := ""
+		if item != nil {
+			marker = map[model.ChangeType]string{model.ChangeAdded: "ADDED", model.ChangeRemoved: "REMOVED", model.ChangeModified: "MODIFIED"}[item.Change]
 		}
-		u.changesCards.addDeferred(46, item.DisplayPath, func(button *fltk.Button) {
+		path := row.Path
+		row := row
+		u.changesCards.addDeferred(46, path, func(button *fltk.Button) {
 			drawChangeCard(button, changeCardStyle{
-				Path: item.DisplayPath, Detail: diffEntryDetail(item), Status: marker,
-				Change: string(item.Change), Directory: entry != nil && entry.Type == model.EntryDirectory,
+				Path: row.Name, Detail: diffTreeRowDetail(row), Status: marker,
+				Change: diffTreeRowChange(row), Directory: row.Directory, Indent: row.Depth,
+				CanExpand: row.CanExpand, Expanded: row.Expanded,
 			})
-		}, nil)
+		}, func() {
+			if row.CanExpand {
+				u.diffExpanded[path] = !u.diffExpanded[path]
+				u.renderDiff()
+			}
+		})
 	}
 	u.changesCards.finishBatch()
-	u.renderResultNavigation(page.Total, page.Start, page.End)
+	u.renderTreeNavigation(tree.Changes, len(tree.Rows))
 	u.updateCleanupAvailability()
-	if page.Total == 0 {
+	if tree.Changes == 0 {
 		message := "No changed items in this comparison."
 		if query != "" || u.filter != "" {
 			message = "No changes match the current filter."
 		}
 		u.changesCards.showEmpty(message)
 	}
+}
+
+func (u *App) renderTreeNavigation(changes, visibleRows int) {
+	if changes == 0 {
+		u.resultsStatus.SetLabel("0 changes")
+	} else {
+		u.resultsStatus.SetLabel(fmt.Sprintf("%d changed item%s · %d visible", changes, pluralSuffix(changes), visibleRows))
+	}
+	u.previousPage.Deactivate()
+	u.nextPage.Deactivate()
+}
+
+func diffTreeRowChange(row diffTreeRow) string {
+	if row.Entry == nil {
+		return ""
+	}
+	return string(row.Entry.Change)
+}
+
+func diffTreeRowDetail(row diffTreeRow) string {
+	if row.Directory {
+		before := folderSideLabel(row.Entry, true, row.FolderSize)
+		after := folderSideLabel(row.Entry, false, row.FolderSize)
+		return before + " → " + after
+	}
+	if row.Entry == nil {
+		return "Folder"
+	}
+	return diffEntryDetail(*row.Entry)
+}
+
+func folderSideLabel(entry *model.DiffEntry, before bool, size model.FolderSize) string {
+	var snapshotEntry *model.SnapshotEntry
+	present, bytes := size.AfterPresent, size.AfterBytes
+	if before {
+		present, bytes = size.BeforePresent, size.BeforeBytes
+		if entry != nil {
+			snapshotEntry = entry.Before
+		}
+	} else if entry != nil {
+		snapshotEntry = entry.After
+	}
+	if snapshotEntry != nil && snapshotEntry.Type != model.EntryDirectory {
+		return entrySizeLabel(snapshotEntry)
+	}
+	if present || snapshotEntry != nil {
+		return formatBytes(bytes)
+	}
+	return "none"
 }
 
 func (u *App) renderResultNavigation(total, start, end int) {
@@ -1085,7 +1138,6 @@ func (u *App) updateCleanupAvailability() {
 
 func (u *App) setFilter(filter model.ChangeType) {
 	u.filter = filter
-	u.diffPage = 0
 	if u.compareState == comparisonDone {
 		u.renderDiff()
 	} else {

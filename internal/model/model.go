@@ -174,6 +174,13 @@ type DiffSummary struct {
 	NetBytes                            int64
 }
 
+type FolderSize struct {
+	BeforeBytes   int64
+	AfterBytes    int64
+	BeforePresent bool
+	AfterPresent  bool
+}
+
 type DiffResult struct {
 	BeforeID           string
 	AfterID            string
@@ -182,4 +189,5 @@ type DiffResult struct {
 	IgnoreRulesChanged bool
 	Entries            []DiffEntry
 	Summary            DiffSummary
+	FolderSizes        map[string]FolderSize
 }

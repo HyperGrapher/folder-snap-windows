@@ -91,8 +91,88 @@ func (Engine) CompareContext(ctx context.Context, before, after model.Snapshot) 
 	if err := orderDiffEntriesContext(ctx, result.Entries); err != nil {
 		return model.DiffResult{}, err
 	}
+	result.FolderSizes, err = comparisonFolderSizes(ctx, left, right, result.Entries)
+	if err != nil {
+		return model.DiffResult{}, err
+	}
 	result.Summary.NetBytes = after.Header.TotalFileBytes - before.Header.TotalFileBytes
 	return result, nil
+}
+
+// comparisonFolderSizes calculates complete recursive folder totals only for
+// folders represented in the changed-item tree. This keeps memory proportional
+// to the displayed hierarchy while including unchanged descendant files.
+func comparisonFolderSizes(ctx context.Context, before, after []model.SnapshotEntry, changes []model.DiffEntry) (map[string]model.FolderSize, error) {
+	needed := make(map[string]bool)
+	for _, change := range changes {
+		current := parentPath(change.Path)
+		if diffEntryDirectory(change) {
+			current = change.Path
+		}
+		for current != "" {
+			needed[current] = true
+			current = parentPath(current)
+		}
+	}
+	if len(needed) == 0 {
+		return nil, nil
+	}
+	sizes := make(map[string]model.FolderSize, len(needed))
+	accumulateFolderSizes := func(entries []model.SnapshotEntry, beforeSide bool) error {
+		for index, entry := range entries {
+			if index&4095 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			if entry.Type == model.EntryDirectory && needed[entry.RelativePath] {
+				size := sizes[entry.RelativePath]
+				if beforeSide {
+					size.BeforePresent = true
+				} else {
+					size.AfterPresent = true
+				}
+				sizes[entry.RelativePath] = size
+			}
+			if entry.Type != model.EntryFile {
+				continue
+			}
+			for current := parentPath(entry.RelativePath); current != ""; current = parentPath(current) {
+				if !needed[current] {
+					continue
+				}
+				size := sizes[current]
+				if beforeSide {
+					size.BeforeBytes += entry.Size
+					size.BeforePresent = true
+				} else {
+					size.AfterBytes += entry.Size
+					size.AfterPresent = true
+				}
+				sizes[current] = size
+			}
+		}
+		return nil
+	}
+	if err := accumulateFolderSizes(before, true); err != nil {
+		return nil, err
+	}
+	if err := accumulateFolderSizes(after, false); err != nil {
+		return nil, err
+	}
+	return sizes, nil
+}
+
+func parentPath(value string) string {
+	if index := strings.LastIndexByte(strings.Trim(value, "/"), '/'); index >= 0 {
+		return strings.Trim(value, "/")[:index]
+	}
+	return ""
+}
+
+func diffEntryDirectory(entry model.DiffEntry) bool {
+	return (entry.Before != nil && entry.Before.Type == model.EntryDirectory) ||
+		(entry.After != nil && entry.After.Type == model.EntryDirectory)
 }
 
 // Scanner output is already path-sorted. Reusing it avoids duplicating two
