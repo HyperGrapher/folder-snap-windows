@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FolderSnap snapshot</title>
+  <style>
+    :root { color-scheme: light dark; font-family: "Segoe UI", system-ui, sans-serif; }
+    body { margin: 0; padding: 24px; background: #111827; color: #e5e7eb; }
+    main { max-width: 1100px; margin: 0 auto; }
+    header { margin-bottom: 20px; }
+    h1 { margin: 0 0 6px; font-size: 1.55rem; }
+    .muted { color: #9ca3af; }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
+    input, select { box-sizing: border-box; min-height: 36px; border: 1px solid #374151; border-radius: 6px; padding: 7px 10px; background: #1f2937; color: inherit; }
+    input { flex: 1 1 280px; }
+    select { flex: 0 0 160px; }
+    #summary { margin: 8px 0 12px; color: #9ca3af; font-size: .9rem; }
+    #tree { border: 1px solid #374151; border-radius: 8px; overflow: hidden; background: #172033; }
+    .row { display: grid; grid-template-columns: minmax(220px, 1fr) 82px 112px 210px; gap: 12px; align-items: center; min-height: 42px; padding: 0 14px; border-bottom: 1px solid #263248; border-left: 4px solid transparent; }
+    .row:last-child { border-bottom: 0; }
+    .row:hover { background: #1e2b42; }
+    .row.added { background: #123d2d; border-left-color: #35c98b; }
+    .row.removed { background: #482526; border-left-color: #ed7777; }
+    .row.modified { background: #4b3a1d; border-left-color: #f0b84f; }
+    .row.warning { background: #392d4b; border-left-color: #c49af2; }
+    .name { min-width: 0; display: flex; align-items: center; gap: 7px; }
+    .toggle { width: 20px; border: 0; padding: 0; background: transparent; color: #9ca3af; cursor: pointer; font-size: 1.05rem; }
+    .toggle.empty { cursor: default; }
+    .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .folder { color: #f0c674; }
+    .file { color: #d1d5db; }
+    .meta { color: #cbd5e1; text-align: right; font-variant-numeric: tabular-nums; }
+    .status { justify-self: stretch; border-radius: 5px; padding: 3px 5px; text-align: center; font-size: .72rem; font-weight: 700; letter-spacing: .02em; }
+    .status.added { color: #8df0c0; background: #1d7655; }
+    .status.removed { color: #ffd0d0; background: #9b4145; }
+    .status.modified { color: #ffe6a5; background: #9a6e20; }
+    .status.warning { color: #ecdfff; background: #69459a; }
+    .date { color: #9ca3af; font-size: .86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .empty { padding: 28px; text-align: center; color: #9ca3af; }
+    @media (max-width: 720px) {
+      body { padding: 12px; }
+      .row { grid-template-columns: minmax(130px, 1fr) 78px 90px; gap: 8px; }
+      .row .date { grid-column: 1 / -1; }
+      .date { grid-column: 1 / -1; padding-left: 27px; padding-bottom: 7px; margin-top: -8px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title">FolderSnap snapshot</h1>
+    <div id="capture" class="muted"></div>
+  </header>
+  <section class="controls" aria-label="Snapshot controls">
+    <input id="search" type="search" placeholder="Filter by name or path…" aria-label="Filter by name or path">
+    <select id="change-filter" aria-label="Filter changes">
+      <option value="">All entries</option>
+      <option value="added">Added</option>
+      <option value="removed">Deleted</option>
+      <option value="modified">Modified</option>
+    </select>
+    <select id="sort" aria-label="Sort entries">
+      <option value="name">Name</option>
+      <option value="size">Size</option>
+      <option value="created">Creation date</option>
+    </select>
+    <select id="direction" aria-label="Sort direction">
+      <option value="asc">Ascending</option>
+      <option value="desc">Descending</option>
+    </select>
+  </section>
+  <div id="summary" aria-live="polite"></div>
+  <section id="tree" role="tree" aria-label="Snapshot entries"></section>
+</main>
+
+<!-- The Qt exporter replaces the JSON string below with escaped snapshot DTO JSON. -->
+<script type="application/json" id="snapshot-data">"__FOLDERSNAP_SNAPSHOT_JSON__"</script>
+<script>
+(function () {
+  "use strict";
+
+  const sample = {
+    reportType: "snapshot",
+    header: { displayTitle: "FolderSnap snapshot", completedAtUtc: "", fileCount: 0, directoryCount: 0, totalFileBytes: 0 },
+    entries: []
+  };
+  const raw = document.getElementById("snapshot-data").textContent.trim();
+  let snapshot;
+  try {
+    const decoded = JSON.parse(raw);
+    snapshot = typeof decoded === "string" ? sample : decoded;
+  } catch (_) {
+    snapshot = sample;
+  }
+
+  const comparison = snapshot.reportType === "comparison";
+  const root = { path: "", identity: "", name: snapshot.header && (snapshot.header.displayTitle || snapshot.header.rootTitle) || "Snapshot", entry: null, children: new Map(), totalSize: 0n, folderSize: null };
+  const entries = Array.isArray(snapshot.entries) ? snapshot.entries : [];
+  const expanded = new Set();
+  const search = document.getElementById("search");
+  const changeFilter = document.getElementById("change-filter");
+  const sort = document.getElementById("sort");
+  const direction = document.getElementById("direction");
+  const tree = document.getElementById("tree");
+  changeFilter.hidden = !comparison;
+
+  function cleanPath(value) { return String(value || "").replaceAll("\\", "/").replace(/^\/+|\/+$/g, ""); }
+  function displayPath(entry) { return cleanPath(entry.displayPath || entry.path); }
+  function identityPath(entry) { return cleanPath(entry.path || entry.displayPath).toLowerCase(); }
+  function basename(value) { const parts = cleanPath(value).split("/"); return parts[parts.length - 1] || "(root)"; }
+  function beforeEntry(change) { return comparison && change ? change.before : null; }
+  function afterEntry(change) { return comparison && change ? change.after : null; }
+  function effectiveEntry(node) { return comparison ? (afterEntry(node.entry) || beforeEntry(node.entry)) : node.entry; }
+  function dateEntry(node) { return effectiveEntry(node); }
+  function isFolder(node) {
+    const entry = effectiveEntry(node);
+    return node.children.size > 0 || (entry && entry.type === "directory");
+  }
+  function addEntry(entry) {
+    const shown = displayPath(entry), identity = identityPath(entry);
+    if (!shown || !identity) return;
+    const shownParts = shown.split("/"), idParts = identity.split("/");
+    let node = root;
+    for (let i = 0; i < shownParts.length; i++) {
+      const key = idParts[i] || shownParts[i].toLowerCase();
+      let child = node.children.get(key);
+      if (!child) {
+        child = { path: node.path ? node.path + "/" + key : key, identity: node.identity ? node.identity + "/" + key : key, name: shownParts[i], entry: null, children: new Map(), totalSize: 0n, folderSize: null };
+        node.children.set(key, child);
+      }
+      node = child;
+    }
+    node.name = basename(shown);
+    node.entry = entry;
+  }
+  entries.forEach(addEntry);
+
+  function computeSizes(node) {
+    let total = !comparison && node.entry && node.entry.type === "file" ? sizeBig(rawSize(node.entry)) : 0n;
+    node.children.forEach(child => { total += computeSizes(child); });
+    node.totalSize = total;
+    if (comparison && isFolder(node)) node.folderSize = snapshot.folderSizes && snapshot.folderSizes[node.identity] || null;
+    return total;
+  }
+  computeSizes(root);
+  root.children.forEach(child => { if (isFolder(child)) expanded.add(child.path); });
+
+  function changeValue(node) { return comparison && node.entry ? String(node.entry.change || "").toLowerCase() : ""; }
+  function changeLabel(value) { return value === "removed" ? "Deleted" : (value ? value[0].toUpperCase() + value.slice(1) : ""); }
+  function rowClass(node) {
+    const change = changeValue(node);
+    if (change === "added" || change === "removed" || change === "modified") return change;
+    if (node.entry && (node.entry.uncertain || node.entry.scopeDifference)) return "warning";
+    return "";
+  }
+  function createdValue(entry) { return entry && (entry.createdAtUtc || entry.createdAt || ""); }
+  function dateValue(entry) {
+    const value = createdValue(entry);
+    if (value) return Date.parse(value) || 0;
+    // Exporters should provide createdAtUtc because JSON numbers cannot safely
+    // represent Windows nanoseconds. This fallback is for hand-authored data.
+    try { return Number(BigInt(String(entry && entry.createdNs || 0)) / 1000000n); } catch (_) { return 0; }
+  }
+  function rawSize(entry) { return entry && (entry.sizeBytes !== undefined ? entry.sizeBytes : entry.size) || 0; }
+  function sizeBig(value) { try { return BigInt(String(value)); } catch (_) { return 0n; } }
+  function folderSideSize(node, side) {
+    if (!node.folderSize || node.folderSize[side + "Present"] === false) return null;
+    const value = node.folderSize[side + "Bytes"];
+    return value === undefined ? null : sizeBig(value);
+  }
+  function sizeValue(node) {
+    if (!comparison) return isFolder(node) ? node.totalSize : sizeBig(rawSize(node.entry));
+    const afterSize = folderSideSize(node, "after");
+    const beforeSize = folderSideSize(node, "before");
+    if (isFolder(node) && afterSize !== null) return afterSize;
+    if (isFolder(node) && beforeSize !== null) return beforeSize;
+    return sizeBig(rawSize(afterEntry(node.entry) || beforeEntry(node.entry)));
+  }
+  function sideSizeLabel(node, side) {
+    const part = side === "after" ? afterEntry(node.entry) : beforeEntry(node.entry);
+    if (part && part.type !== "directory") return formatBytes(sizeBig(rawSize(part)));
+    const folderSize = folderSideSize(node, side);
+    if (folderSize !== null || (part && part.type === "directory")) return formatBytes(folderSize || 0n);
+    return "none";
+  }
+  function metaLabel(node) {
+    if (!comparison) return formatBytes(sizeValue(node));
+    return sideSizeLabel(node, "before") + " → " + sideSizeLabel(node, "after");
+  }
+  function compareNodes(a, b) {
+    const field = sort.value;
+    let result = 0;
+    if (field === "size") {
+      const left = sizeValue(a), right = sizeValue(b);
+      result = left < right ? -1 : (left > right ? 1 : 0);
+    }
+    else if (field === "created") result = dateValue(dateEntry(a)) - dateValue(dateEntry(b));
+    else result = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+    if (!result) result = a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: "base" });
+    return direction.value === "desc" ? -result : result;
+  }
+  function matches(node, term) {
+    const selectedChange = changeFilter.value;
+    if (comparison && selectedChange && changeValue(node) !== selectedChange) return false;
+    if (!term) return true;
+    const e = effectiveEntry(node) || {};
+    return [node.name, node.path, e.displayPath, e.path, node.entry && node.entry.displayPath, node.entry && node.entry.path].some(value => String(value || "").toLowerCase().includes(term));
+  }
+  function hasMatch(node, term) {
+    if (matches(node, term)) return true;
+    for (const child of node.children.values()) if (hasMatch(child, term)) return true;
+    return false;
+  }
+  function formatBytes(value) {
+    const numeric = typeof value === "bigint" ? Number(value) : value;
+    if (!Number.isFinite(numeric)) return "—";
+    if (numeric < 1024) return Math.round(numeric) + " B";
+    const units = ["KB", "MB", "GB", "TB"], index = Math.min(units.length - 1, Math.floor(Math.log(numeric) / Math.log(1024)) - 1);
+    return (numeric / Math.pow(1024, index + 1)).toFixed(1) + " " + units[index];
+  }
+  function formatDate(entry) {
+    const value = createdValue(entry);
+    if (!value) return "Creation date unavailable";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "Creation date unavailable" : date.toLocaleString();
+  }
+  function text(value) { return document.createTextNode(String(value)); }
+
+  function renderNode(node, depth, term, fragment) {
+    if (node !== root && !hasMatch(node, term)) return;
+    const row = document.createElement("div");
+    const statusClass = rowClass(node);
+    row.className = "row" + (statusClass ? " " + statusClass : "");
+    row.setAttribute("role", "treeitem");
+    row.setAttribute("aria-level", String(depth + 1));
+    const folder = isFolder(node);
+    const open = folder && (term ? hasMatch(node, term) : expanded.has(node.path));
+    if (folder) row.setAttribute("aria-expanded", String(open));
+    const name = document.createElement("div"); name.className = "name"; name.style.paddingLeft = (depth * 18) + "px";
+    const toggle = document.createElement("button"); toggle.className = "toggle" + (folder ? "" : " empty"); toggle.type = "button";
+    toggle.setAttribute("aria-label", folder ? (open ? "Collapse " : "Expand ") + node.name : node.name);
+    toggle.appendChild(text(folder ? (open ? "▾" : "▸") : "•"));
+    if (folder) toggle.addEventListener("click", () => { if (expanded.has(node.path)) expanded.delete(node.path); else expanded.add(node.path); render(); });
+    name.appendChild(toggle);
+    const label = document.createElement("span"); label.className = "label " + (folder ? "folder" : "file"); label.appendChild(text(node.name)); name.appendChild(label);
+    const status = document.createElement("div"); status.className = "status" + (statusClass ? " " + statusClass : ""); status.appendChild(text(comparison ? changeLabel(changeValue(node)) : ""));
+    const meta = document.createElement("div"); meta.className = "meta"; meta.appendChild(text(metaLabel(node)));
+    const date = document.createElement("div"); date.className = "date"; date.appendChild(text(formatDate(dateEntry(node))));
+    row.append(name, status, meta, date); fragment.appendChild(row);
+    if (folder && open) Array.from(node.children.values()).sort(compareNodes).forEach(child => renderNode(child, depth + 1, term, fragment));
+  }
+
+  function render() {
+    const term = search.value.trim().toLowerCase();
+    const fragment = document.createDocumentFragment();
+    const children = Array.from(root.children.values()).filter(child => hasMatch(child, term)).sort(compareNodes);
+    if (!children.length) {
+      const empty = document.createElement("div"); empty.className = "empty"; empty.appendChild(text(term ? "No entries match this filter." : "This snapshot contains no entries.")); fragment.appendChild(empty);
+    } else children.forEach(child => renderNode(child, 0, term, fragment));
+    tree.replaceChildren(fragment);
+    const h = snapshot.header || {};
+    document.getElementById("title").textContent = h.displayTitle || h.rootTitle || (comparison ? "FolderSnap comparison" : "FolderSnap snapshot");
+    const captured = comparison ? (h.afterCompletedAtUtc || h.completedAtUtc) : h.completedAtUtc;
+    document.getElementById("capture").textContent = comparison
+      ? `Compared ${h.beforeCompletedAtUtc ? new Date(h.beforeCompletedAtUtc).toLocaleString() : "?"} → ${captured ? new Date(captured).toLocaleString() : "?"}`
+      : (captured ? "Captured " + new Date(captured).toLocaleString() : "");
+    const totalBytes = comparison ? entries.length : Number(h.totalFileBytes || root.totalSize);
+    document.getElementById("summary").textContent = comparison
+      ? `${entries.length.toLocaleString()} changed entries · Added/Deleted/Modified rows are color coded`
+      : `${entries.length.toLocaleString()} entries · ${Number(h.fileCount || 0).toLocaleString()} files · ${Number(h.directoryCount || 0).toLocaleString()} folders · ${formatBytes(totalBytes)}`;
+  }
+  [search, sort, direction].forEach(control => {
+    control.addEventListener("input", render);
+    control.addEventListener("change", render);
+  });
+  render();
+}());
+</script>
+</body>
+</html>
